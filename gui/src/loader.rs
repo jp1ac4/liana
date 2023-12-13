@@ -46,7 +46,7 @@ pub struct Loader {
     pub daemon_started: bool,
     pub internal_bitcoind: Option<Bitcoind>,
     pub waiting_daemon_bitcoind: bool,
-
+    pub log_sender: Option<mpsc::Sender<Input>>,
     step: Step,
 }
 
@@ -105,6 +105,7 @@ impl Loader {
                 daemon_started: false,
                 internal_bitcoind,
                 waiting_daemon_bitcoind: false,
+                log_sender: None,
             },
             Command::perform(connect(path), Message::Loaded),
         )
@@ -579,4 +580,91 @@ fn socket_path(datadir: &Path, network: bitcoin::Network) -> PathBuf {
     path.push(network.to_string());
     path.push("lianad_rpc");
     path
+}
+
+
+// use tracing::{Event, Subscriber};
+// use tracing_subscriber::{
+//     layer,
+//     prelude::*,
+// };
+
+/// Used as a layer to send log messages to a channel.
+// pub struct LogStream {
+//     pub sender: mpsc::Sender<String>,
+// }
+
+// impl<S> layer::Layer<S> for LogStream
+// where
+//     S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+// {
+//     fn on_event(&self, event: &Event<'_>, _ctx: layer::Context<'_, S>) {
+//         let mut visitor = LogStreamVisitor {
+//             sender: &self.sender,
+//         };
+//         event.record(&mut visitor);
+//     }
+// }
+
+/// Used to record log messages by sending them to the channel.
+// struct LogStreamVisitor<'a> {
+//     sender: &'a mpsc::Sender<String>,
+// }
+
+// impl<'a> tracing::field::Visit for LogStreamVisitor<'a> {
+//     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+//         if field.name() == "message" {
+//             let msg = format!("{:?}", value);
+//             let _ = self.sender. send(msg);
+//         }
+//     }
+// }
+
+use iced::subscription::{self};
+use iced::futures::channel::mpsc;
+use iced::futures::sink::SinkExt;
+///
+enum IcedEvent {
+    Ready(mpsc::Sender<Input>),
+    WorkFinished,
+    // ...
+}
+pub enum Input {
+    DoSomeWork(String),
+    // ...
+}
+enum State {
+    Starting,
+    Ready(mpsc::Receiver<Input>),
+}
+fn some_worker() -> Subscription<IcedEvent> {
+    struct SomeWorker;
+    subscription::channel(std::any::TypeId::of::<SomeWorker>(), 100, |mut output| async move {
+        let mut state = State::Starting;
+        loop {
+            match &mut state {
+                State::Starting => {
+                    // Create channel
+                    let (sender, receiver) = mpsc::channel(100);
+                    // Send the sender back to the application
+                    let _ = output.send(IcedEvent::Ready(sender)).await;
+                    // We are ready to receive messages
+                    state = State::Ready(receiver);
+                }
+                State::Ready(receiver) => {
+                    use iced::futures::StreamExt;
+                    // Read next input sent from `Application`
+                    let input = receiver.select_next_some().await;
+                    match input {
+                        Input::DoSomeWork(msg) => {
+                            // Do some async work...
+                            // Finally, we can optionally produce a message to tell the
+                            // `Application` the work is done
+                            let _ = output.send(IcedEvent::WorkFinished).await;
+                        }
+                    }
+                }
+            }
+        }
+    })
 }
