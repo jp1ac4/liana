@@ -9,7 +9,7 @@ use crate::{
     database::{Coin, DatabaseConnection, DatabaseInterface},
     descriptors,
     spend::{
-        create_spend, AddrInfo, CandidateCoin, CreateSpendRes, SpendCreationError,
+        create_spend, AddrInfo, CandidateCoin, CreateSpendRes, CreateSpendWarning, SpendCreationError,
         SpendOutputAddress, SpendTxFees, TxGetter,
     },
     DaemonControl, VERSION,
@@ -649,6 +649,7 @@ impl DaemonControl {
         is_cancel: bool,
         feerate_vb: Option<u64>,
     ) -> Result<CreateSpendResult, CommandError> {
+        let mut rbf_warnings = Vec::<CreateSpendWarning>::new();
         let mut db_conn = self.db.connection();
         let mut tx_getter = BitcoindTxGetter::new(&self.bitcoin);
 
@@ -690,27 +691,24 @@ impl DaemonControl {
         // https://github.com/bitcoin/bitcoin/blob/master/doc/policy/mempool-replacements.md). By
         // default (ie if the transaction we are replacing was dropped from the mempool) there is
         // no minimum absolute fee and the minimum feerate is 1, the minimum relay feerate.
-        let (min_feerate_vb, descendant_fees) = self
-            .bitcoin
-            .mempool_spenders(&prev_outpoints)
-            .into_values()
-            .fold(
-                (1, bitcoin::Amount::from_sat(0)),
-                |(min_feerate, descendant_fee), entry| {
-                    let entry_feerate = entry
-                        .fees
-                        .base
-                        .checked_div(entry.vsize)
-                        .expect("Can't have a null vsize or tx would be invalid")
-                        .to_sat()
-                        .checked_add(1)
-                        .expect("Can't overflow or tx would be invalid");
-                    (
-                        std::cmp::max(min_feerate, entry_feerate),
-                        descendant_fee + entry.fees.descendant,
-                    )
-                },
-            );
+        let directly_conflicting_txs = self.bitcoin.mempool_spenders(&prev_outpoints);
+        let (min_feerate_vb, descendant_fees) = directly_conflicting_txs.values().fold(
+            (1, bitcoin::Amount::from_sat(0)),
+            |(min_feerate, descendant_fee), entry| {
+                let entry_feerate = entry
+                    .fees
+                    .base
+                    .checked_div(entry.vsize)
+                    .expect("Can't have a null vsize or tx would be invalid")
+                    .to_sat()
+                    .checked_add(1)
+                    .expect("Can't overflow or tx would be invalid");
+                (
+                    std::cmp::max(min_feerate, entry_feerate),
+                    descendant_fee + entry.fees.descendant,
+                )
+            },
+        );
         // Check replacement transaction's target feerate, if set, is high enough,
         // and otherwise set it to the min feerate found above.
         let feerate_vb = if is_cancel {
@@ -723,6 +721,20 @@ impl DaemonControl {
                 feerate_vb,
             )));
         }
+        // Check if any coins created by directly conflicting transactions are being spent.
+        rbf_warnings.extend({
+            let directly_conflicting_txids: Vec<_> = directly_conflicting_txs.keys().collect();
+            // Include unconfirmed coins in case they have not yet been marked as spending in the DB.
+            let coins_from_directly_conflicting: Vec<_> = db_conn
+                .coins(&[CoinStatus::Unconfirmed, CoinStatus::Spending], &[])
+                .into_keys()
+                .filter(|op| directly_conflicting_txids.contains(&&op.txid))
+                .collect();
+            self.bitcoin
+                .mempool_spenders(&coins_from_directly_conflicting)
+                .keys()
+                .map(|txid| CreateSpendWarning::UnconfirmedTxWillBeDropped(*txid))
+        });
         // Get info about prev outputs to determine replacement outputs.
         let prev_derivs: Vec<_> = prev_psbt
             .unsigned_tx
@@ -861,10 +873,10 @@ impl DaemonControl {
                 if has_change {
                     self.maybe_increase_next_deriv_index(&mut db_conn, &change_address.info);
                 }
-
+                rbf_warnings.extend(warnings);
                 return Ok(CreateSpendResult {
                     psbt: rbf_psbt,
-                    warnings: warnings.iter().map(|w| w.to_string()).collect(),
+                    warnings: rbf_warnings.iter().map(|w| w.to_string()).collect(),
                 });
             }
         }

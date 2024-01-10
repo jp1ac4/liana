@@ -459,6 +459,7 @@ pub enum SpendTxFees {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CreateSpendWarning {
     ChangeAddedToFee(u64),
+    UnconfirmedTxWillBeDropped(bitcoin::Txid),
 }
 
 impl fmt::Display for CreateSpendWarning {
@@ -469,6 +470,11 @@ impl fmt::Display for CreateSpendWarning {
                 "Change amount of {} sat{} added to fee as it was too small to create a transaction output.",
                 amt,
                 if *amt > 1 {"s"} else {""},
+            ),
+            CreateSpendWarning::UnconfirmedTxWillBeDropped(txid) => write!(
+                f,
+                "The unconfirmed transaction '{}' will be dropped from the mempool.",
+                txid
             ),
         }
     }
