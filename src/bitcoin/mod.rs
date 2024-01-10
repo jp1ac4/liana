@@ -11,7 +11,7 @@ use crate::{
 };
 pub use d::{MempoolEntry, SyncProgress};
 
-use std::{fmt, sync};
+use std::{collections::HashMap, fmt, sync};
 
 use miniscript::bitcoin::{self, address};
 
@@ -115,7 +115,10 @@ pub trait BitcoinInterface: Send {
     ) -> Option<(bitcoin::Transaction, Option<Block>)>;
 
     /// Get the details of unconfirmed transactions spending these outpoints, if any.
-    fn mempool_spenders(&self, outpoints: &[bitcoin::OutPoint]) -> Vec<MempoolEntry>;
+    fn mempool_spenders(
+        &self,
+        outpoints: &[bitcoin::OutPoint],
+    ) -> HashMap<bitcoin::Txid, MempoolEntry>;
 }
 
 impl BitcoinInterface for d::BitcoinD {
@@ -360,10 +363,13 @@ impl BitcoinInterface for d::BitcoinD {
         self.get_transaction(txid).map(|res| (res.tx, res.block))
     }
 
-    fn mempool_spenders(&self, outpoints: &[bitcoin::OutPoint]) -> Vec<MempoolEntry> {
+    fn mempool_spenders(
+        &self,
+        outpoints: &[bitcoin::OutPoint],
+    ) -> HashMap<bitcoin::Txid, MempoolEntry> {
         self.mempool_txs_spending_prevouts(outpoints)
             .into_iter()
-            .filter_map(|txid| self.mempool_entry(&txid))
+            .filter_map(|txid| self.mempool_entry(&txid).map(|entry| (txid, entry)))
             .collect()
     }
 }
@@ -453,7 +459,10 @@ impl BitcoinInterface for sync::Arc<sync::Mutex<dyn BitcoinInterface + 'static>>
         self.lock().unwrap().wallet_transaction(txid)
     }
 
-    fn mempool_spenders(&self, outpoints: &[bitcoin::OutPoint]) -> Vec<MempoolEntry> {
+    fn mempool_spenders(
+        &self,
+        outpoints: &[bitcoin::OutPoint],
+    ) -> HashMap<bitcoin::Txid, MempoolEntry> {
         self.lock().unwrap().mempool_spenders(outpoints)
     }
 }

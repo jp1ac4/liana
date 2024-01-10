@@ -693,7 +693,7 @@ impl DaemonControl {
         let (min_feerate_vb, descendant_fees) = self
             .bitcoin
             .mempool_spenders(&prev_outpoints)
-            .into_iter()
+            .into_values()
             .fold(
                 (1, bitcoin::Amount::from_sat(0)),
                 |(min_feerate, descendant_fee), entry| {

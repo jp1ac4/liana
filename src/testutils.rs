@@ -118,8 +118,8 @@ impl BitcoinInterface for DummyBitcoind {
         self.txs.get(txid).cloned()
     }
 
-    fn mempool_spenders(&self, _: &[bitcoin::OutPoint]) -> Vec<MempoolEntry> {
-        Vec::new()
+    fn mempool_spenders(&self, _: &[bitcoin::OutPoint]) -> HashMap<bitcoin::Txid, MempoolEntry> {
+        HashMap::new()
     }
 }
 
