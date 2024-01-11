@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, convert::TryInto, fmt};
 
 pub use bdk_coin_select::InsufficientFunds;
 use bdk_coin_select::{
-    change_policy, metrics::LowestFee, Candidate, CoinSelector, DrainWeights, FeeRate, Target,
+    metrics::LowestFee, Candidate, ChangePolicy, CoinSelector, DrainWeights, FeeRate, Target,
     TXIN_BASE_WEIGHT,
 };
 use miniscript::bitcoin::{
@@ -177,47 +177,24 @@ pub struct CandidateCoin {
 ///
 /// Using this metric with `must_have_change: false` is equivalent to using
 /// [`LowestFee`].
-struct LowestFeeChangeCondition<'c, C> {
+struct LowestFeeChangeCondition {
     /// The underlying [`LowestFee`] metric to use.
-    pub lowest_fee: LowestFee<'c, C>,
+    pub lowest_fee: LowestFee,
     /// If `true`, only solutions with change will be found.
     pub must_have_change: bool,
 }
 
-impl<'c, C> bdk_coin_select::BnbMetric for LowestFeeChangeCondition<'c, C>
-where
-    for<'a, 'b> C: Fn(&'b CoinSelector<'a>, Target) -> bdk_coin_select::Drain,
-{
-    fn score(&mut self, cs: &CoinSelector<'_>) -> Option<bdk_coin_select::float::Ordf32> {
-        let drain = (self.lowest_fee.change_policy)(cs, self.lowest_fee.target);
+impl bdk_coin_select::BnbMetric for LowestFeeChangeCondition {
+    fn score(&mut self, cs: &CoinSelector) -> Option<bdk_coin_select::float::Ordf32> {
+        let drain = cs.drain(self.lowest_fee.target, self.lowest_fee.change_policy);
         if drain.is_none() && self.must_have_change {
             None
         } else {
-            // This is a temporary partial fix for https://github.com/bitcoindevkit/coin-select/issues/6
-            // until it has been fixed upstream.
-            // TODO: Revert this change once upstream fix has been made.
-            // When calculating the score, the excess should be added to changeless solutions instead of
-            // those with change.
-            // Given a solution has been found, this fix adds or removes the excess to its incorrectly
-            // calculated score as required so that two changeless solutions can be differentiated
-            // if one has higher excess (and therefore pays a higher fee).
-            // Note that the `bound` function is also affected by this bug, which could mean some branches
-            // are not considered when running BnB, but at least this fix will mean the score for those
-            // solutions that are found is correct.
-            self.lowest_fee.score(cs).map(|score| {
-                // See https://github.com/bitcoindevkit/coin-select/blob/29b187f5509a01ba125a0354f6711e317bb5522a/src/metrics/lowest_fee.rs#L35-L45
-                assert!(cs.selected_value() >= self.lowest_fee.target.value);
-                let excess = (cs.selected_value() - self.lowest_fee.target.value) as f32;
-                bdk_coin_select::float::Ordf32(if drain.is_none() {
-                    score.0 + excess
-                } else {
-                    score.0 - excess
-                })
-            })
+            self.lowest_fee.score(cs)
         }
     }
 
-    fn bound(&mut self, cs: &CoinSelector<'_>) -> Option<bdk_coin_select::float::Ordf32> {
+    fn bound(&mut self, cs: &CoinSelector) -> Option<bdk_coin_select::float::Ordf32> {
         self.lowest_fee.bound(cs)
     }
 
@@ -305,20 +282,25 @@ fn select_coins_for_spend(
         },
         spend_weight: max_input_weight,
     };
-    let change_policy =
-        change_policy::min_value_and_waste(drain_weights, DUST_OUTPUT_SATS, long_term_feerate);
+    let feerate = FeeRate::from_sat_per_vb(feerate_vb);
+    let change_policy = ChangePolicy::min_value_and_waste(
+        drain_weights,
+        DUST_OUTPUT_SATS,
+        feerate,
+        long_term_feerate,
+    );
 
     // Finally, run the coin selection algorithm. We use an opportunistic BnB and if it couldn't
     // find any solution we fall back to selecting coins by descending value.
     let target = Target {
         value: out_value_nochange,
-        feerate: FeeRate::from_sat_per_vb(feerate_vb),
+        feerate,
         min_fee,
     };
     let lowest_fee = LowestFee {
         target,
         long_term_feerate,
-        change_policy: &change_policy,
+        change_policy,
     };
     let lowest_fee_change_cond = LowestFeeChangeCondition {
         lowest_fee,
@@ -341,8 +323,10 @@ fn select_coins_for_spend(
         selector.sort_candidates_by_descending_value_pwu();
         // Select more coins until target is met and change condition satisfied.
         loop {
-            let drain = change_policy(&selector, target);
-            if selector.is_target_met(target, drain) && (drain.is_some() || !must_have_change) {
+            let drain = selector.drain(target, change_policy);
+            if selector.is_target_met_with_drain(target, drain)
+                && (drain.is_some() || !must_have_change)
+            {
                 break;
             }
             if !selector.select_next() {
@@ -362,7 +346,7 @@ fn select_coins_for_spend(
         }
     }
     // By now, selection is complete and we can check how much change to give according to our policy.
-    let drain = change_policy(&selector, target);
+    let drain = selector.drain(target, change_policy);
     let change_amount = bitcoin::Amount::from_sat(drain.value);
     Ok((
         selector
