@@ -22,10 +22,10 @@ use liana_ui::{component::form, widget::*};
 
 use crate::{
     bitcoind::{
-        self, bitcoind_network_dir, internal_bitcoind_datadir, internal_bitcoind_directory,
-        Bitcoind, ConfigField, InternalBitcoindConfig, InternalBitcoindConfigError,
-        InternalBitcoindNetworkConfig, RpcAuth, RpcAuthType, RpcAuthValues,
-        StartInternalBitcoindError, VERSION,
+        self, bitcoind_network_dir, internal_bitcoind_cookie_path, internal_bitcoind_datadir,
+        internal_bitcoind_directory, stop_bitcoind, Bitcoind, ConfigField, InternalBitcoindConfig,
+        InternalBitcoindConfigError, InternalBitcoindNetworkConfig, RpcAuth, RpcAuthType,
+        RpcAuthValues, StartInternalBitcoindError, VERSION,
     },
     download,
     hw::HardwareWallets,
@@ -721,6 +721,42 @@ impl Step for InternalBitcoindStep {
                         .as_ref()
                         .expect("already added")
                         .clone();
+                    // Before attempting to start bitcoind, stop any existing process that may be running.
+                    // We have to use cookie authentication as we wouldn't know the RPC password. Therefore,
+                    // we use the cookie file's existence as a condition on which to proceed with stopping.
+                    let cookie_path =
+                        internal_bitcoind_cookie_path(&self.bitcoind_datadir, &self.network);
+                    if cookie_path.exists() {
+                        // The process might be running without cookie file existing, but then we wouldn't
+                        // be able to stop it anyway.
+                        let old_config = BitcoindConfig {
+                            rpc_auth: BitcoindRpcAuth::CookieFile(cookie_path.clone()),
+                            addr: bitcoind_config.addr, // we re-used existing ports when defining config
+                        };
+                        if !stop_bitcoind(&old_config) {
+                            self.error = Some(
+                                    "A previous managed bitcoind process is running. Please stop it and try again."
+                                        .to_string(),
+                                );
+                            return Command::none();
+                        }
+                        // Make sure cookie file has been deleted before proceeding.
+                        let mut retry = 0;
+                        while cookie_path.exists() {
+                            if retry < 10 {
+                                retry += 1;
+                                info!("Waiting for previous managed bitcoind process to stop.");
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                            } else {
+                                self.error = Some(
+                                    "A previous managed bitcoind process is running. Please stop it and try again."
+                                        .to_string(),
+                                );
+                                return Command::none();
+                            }
+                        }
+                        info!("A previous managed bitcoind process that was running has now been stopped.");
+                    }
                     match Bitcoind::start(&self.network, bitcoind_config, &self.liana_datadir) {
                         Err(e) => {
                             self.started =
