@@ -453,6 +453,24 @@ def test_coin_selection(lianad, bitcoind):
     assert spend_psbt_4.tx.vout[1].nValue == psbt_manual.tx.vout[1].nValue
     assert spend_psbt_4.tx.vout[1].scriptPubKey != psbt_manual.tx.vout[1].scriptPubKey
 
+    spend_txid_4 = sign_and_broadcast_psbt(lianad, spend_psbt_4)
+    #assert len(lianad.rpc.listcoins()) == 1
+        # Immature
+    imma_addr = lianad.rpc.getnewaddress()["address"]
+    bitcoind.rpc.generatetoaddress(1, imma_addr)
+    wait_for(lambda: lianad.rpc.getinfo()["block_height"] == bitcoind.rpc.getblockcount())
+    assert (
+        len(
+            [
+                c
+                for c in lianad.rpc.listcoins(["unconfirmed"])["coins"]
+                if c["is_change"]
+            ]
+        )
+        == 1
+    )
+    assert(len(lianad.rpc.listcoins(["unconfirmed"])["coins"]) == 2)
+
 
 def test_coin_selection_changeless(lianad, bitcoind):
     """We choose the changeless solution with lowest fee."""

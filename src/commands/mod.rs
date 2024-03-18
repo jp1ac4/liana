@@ -464,7 +464,7 @@ impl DaemonControl {
             // From our unconfirmed coins, we only include those that are change outputs
             // since unconfirmed external deposits are more at risk of being dropped
             // unexpectedly from the mempool as they are beyond the user's control.
-            // This also excludes immature coins, which must not be included as candidates.
+            // Note that immature coins cannot be marked as change outputs.
             db_conn
                 .coins(&[CoinStatus::Unconfirmed, CoinStatus::Confirmed], &[])
                 .into_iter()
