@@ -386,40 +386,60 @@ impl SqliteConn {
             })
             .collect::<Vec<String>>()
             .join(" OR ");
+        let outpoints: Vec<_> = outpoints
+            .iter()
+            .collect::<HashSet<_>>() // remove duplicates
+            .iter()
+            .cloned()
+            .collect();
         // SELECT * FROM coins WHERE (txid, vout) IN ((txidA, voutA), (txidB, voutB));
-        let op_condition = if !outpoints.is_empty() {
-            let mut cond = "(txid, vout) IN (VALUES ".to_string();
-            for (i, outpoint) in outpoints.iter().enumerate() {
-                // NOTE: SQLite doesn't know Satoshi decided txids would be displayed as little-endian
-                // hex.
-                cond += &format!(
-                    "(x'{}', {})",
-                    FrontwardHexTxid(outpoint.txid),
-                    outpoint.vout
-                );
-                if i != outpoints.len() - 1 {
-                    cond += ", ";
-                }
-            }
-            cond += ")";
-            cond
+        let op_conds: Vec<_> = if outpoints.is_empty() {
+            vec![String::new()]
         } else {
-            String::new()
+            // In case of many outpoints, split list into multiple conditions to avoid
+            // query string being too long. As the outpoints are unique, the chunks are disjoint.
+            outpoints
+                .chunks(1000)
+                .map(|op_chunk| {
+                    let mut cond = "(txid, vout) IN (VALUES ".to_string();
+                    for (i, outpoint) in op_chunk.iter().enumerate() {
+                        // NOTE: SQLite doesn't know Satoshi decided txids would be displayed as little-endian
+                        // hex.
+                        cond += &format!(
+                            "(x'{}', {})",
+                            FrontwardHexTxid(outpoint.txid),
+                            outpoint.vout
+                        );
+                        if i != op_chunk.len() - 1 {
+                            cond += ", ";
+                        }
+                    }
+                    cond += ")";
+                    cond
+                })
+                .collect()
         };
-        let where_clause = if !status_condition.is_empty() && !op_condition.is_empty() {
-            format!(" WHERE ({}) AND ({})", status_condition, op_condition)
-        } else if status_condition.is_empty() && !op_condition.is_empty() {
-            format!(" WHERE {}", op_condition)
-        } else if !status_condition.is_empty() && op_condition.is_empty() {
-            format!(" WHERE {}", status_condition)
-        } else {
-            String::new()
-        };
-        let query = format!("SELECT * FROM coins{}", where_clause);
-        db_query(&mut self.conn, &query, rusqlite::params![], |row| {
-            row.try_into()
-        })
-        .expect("Db must not fail")
+        // Combine results from all chunks.
+        op_conds
+            .iter()
+            .flat_map(|op_condition| {
+                let where_clause = if !status_condition.is_empty() && !op_condition.is_empty() {
+                    format!(" WHERE ({}) AND ({})", status_condition, op_condition)
+                } else if status_condition.is_empty() && !op_condition.is_empty() {
+                    format!(" WHERE {}", op_condition)
+                } else if !status_condition.is_empty() && op_condition.is_empty() {
+                    format!(" WHERE {}", status_condition)
+                } else {
+                    String::new()
+                };
+                let query = format!("SELECT * FROM coins{}", where_clause);
+
+                db_query(&mut self.conn, &query, rusqlite::params![], |row| {
+                    row.try_into()
+                })
+                .expect("Db must not fail")
+            })
+            .collect()
     }
 
     /// List coins that are being spent and whose spending transaction is still unconfirmed.
