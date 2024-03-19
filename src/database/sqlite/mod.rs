@@ -365,6 +365,8 @@ impl SqliteConn {
     ) -> Vec<DbCoin> {
         let status_condition = statuses
             .iter()
+            .collect::<HashSet<_>>() // remove duplicates
+            .iter()
             .map(|c| {
                 format!(
                     "({})",
