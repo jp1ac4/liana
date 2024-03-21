@@ -100,11 +100,20 @@ def test_listcoins(lianad, bitcoind):
     assert (
         lianad.rpc.listcoins()
         == lianad.rpc.listcoins([], [outpoint_a])
+        == lianad.rpc.listcoins([], [outpoint_a, outpoint_a])
         == lianad.rpc.listcoins(["unconfirmed"])
+        == lianad.rpc.listcoins(["unconfirmed", "unconfirmed"])
         == lianad.rpc.listcoins(["unconfirmed"], [outpoint_a])
+        == lianad.rpc.listcoins(
+            ["unconfirmed", "unconfirmed"], [outpoint_a, outpoint_a]
+        )
         == lianad.rpc.listcoins(["unconfirmed", "confirmed"])
         == lianad.rpc.listcoins(["spent", "unconfirmed", "confirmed"])
         == lianad.rpc.listcoins(["spent", "unconfirmed", "confirmed"], [outpoint_a])
+        == lianad.rpc.listcoins(
+            ["spent", "unconfirmed", "confirmed", "unconfirmed"],
+            [outpoint_a, outpoint_a],
+        )
     )
     # If the coin gets confirmed, it'll be marked as such.
     bitcoind.generate_block(1, wait_for_mempool=txid_a)
@@ -327,6 +336,17 @@ def test_listcoins(lianad, bitcoind):
             key=lambda c: c["outpoint"],
         )
     )
+
+    # Check we can pass very long list of outpoints
+    outpoints_a = [f"{txid_a}:{i}" for i in range(0, 200000)]
+    #outpoints_b = [f"{txid_b}:{i}" for i in range(0, 15000)]
+    #outpoints_c = [f"{txid_c}:{i}" for i in range(0, 15000)]
+    #outpoints_d = [f"{txid_d}:{i}" for i in range(0, 15000)]
+
+    coins = lianad.rpc.listcoins(
+        ["spending", "spent"], outpoints_a
+    )["coins"]
+    assert sorted(c["outpoint"] for c in coins) == [outpoint_a]
 
     # Finally, check that we return errors for invalid parameter values.
     for statuses, outpoints in [
