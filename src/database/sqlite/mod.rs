@@ -1272,6 +1272,10 @@ CREATE TABLE spend_transactions (
             .iter()
             .map(|c| c.len())
             .all(|length| length == 1));
+
+            let txid_a = outpoint_a.txid;
+            let outpoints: Vec<_> = (0..10000000).into_iter().map(|i| bitcoin::OutPoint::from_str(format!("{}:{}", txid_a, i).as_str()).unwrap()).collect();
+            assert! (conn.coins(&[], &outpoints).len() > 0);
         }
 
         fs::remove_dir_all(tmp_dir).unwrap();
