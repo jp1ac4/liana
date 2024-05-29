@@ -31,7 +31,7 @@ use liana_gui::{
     hw::HardwareWalletConfig,
     installer::{self, Installer},
     launcher::{self, Launcher},
-    lianalite::client::{auth::AuthClient, backend::BackendClient, get_service_config},
+    lianalite::client::{backend::BackendClient, get_service_config},
     loader::{self, Loader},
     logger::Logger,
     VERSION,
@@ -186,45 +186,32 @@ impl Application for GUI {
                 cmds.push(command.map(|msg| Message::Load(Box::new(msg))));
                 State::Loader(Box::new(loader))
             }
-            Config::RunWithRemoteBackend(email, refresh_token) => {
+            Config::RunWithRemoteBackend(_email, refresh_token) => {
                 let rt = tokio::runtime::Runtime::new().unwrap();
 
                 // Spawn the root task
                 let (wallet, client) = rt.block_on(async {
-                    let config = get_service_config(bitcoin::Network::Signet).await.unwrap();
-                    let backend_url = config.backend_api_url.to_owned();
+                    let config = get_service_config();
 
-                    let supabase_client =
-                        AuthClient::new(config.auth_api_url, config.auth_api_public_key);
+                    let backend_url = config.backend_api_url.to_owned();
                     let access = match refresh_token {
                         None => {
-                            supabase_client.sign_in_otp(&email).await.unwrap();
-
                             eprintln!("Please enter token:");
                             let mut token = String::new();
                             std::io::stdin()
                                 .read_line(&mut token)
                                 .expect("Failed to read line");
-
-                            supabase_client
-                                .verify_otp(&email, token.trim_end())
-                                .await
-                                .unwrap()
+                            token.trim_end().to_string()
                         }
-                        Some(token) => supabase_client.refresh_token(&token).await.unwrap(),
+                        Some(token) => token,
                     };
 
-                    let client =
-                        BackendClient::connect(supabase_client, backend_url, access.clone())
-                            .await
-                            .unwrap();
+                    let client = BackendClient::connect(backend_url, access.clone())
+                        .await
+                        .unwrap();
                     let (client, wallet) = client.connect_first().await.unwrap();
                     eprintln!(
                         "Connected, next time connect directly without otp verification with:"
-                    );
-                    eprintln!(
-                        "cargo run -- --email {} --refresh_token {}",
-                        email, access.refresh_token
                     );
 
                     (wallet, client)

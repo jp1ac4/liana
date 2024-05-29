@@ -1,15 +1,8 @@
 pub mod api;
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, RwLock,
-    },
-};
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
-use chrono::Utc;
 use liana::{
     commands::{CoinStatus, GetInfoDescriptors, LCSpendInfo, LabelItem},
     config::Config,
@@ -25,7 +18,7 @@ use crate::{
 
 use self::api::{UTXOKind, DEFAULT_OUTPOINTS_LIMIT};
 
-use super::auth::{self, AccessTokenResponse, AuthError};
+use super::auth::AuthError;
 
 impl From<Error> for DaemonError {
     fn from(value: Error) -> Self {
@@ -55,9 +48,7 @@ fn request<U: IntoUrl>(
 
 #[derive(Debug)]
 pub struct BackendClient {
-    auth: Arc<RwLock<auth::AccessTokenResponse>>,
-    auth_client: auth::AuthClient,
-    auth_refreshing: AtomicBool,
+    access_token: String,
 
     url: String,
     network: Network,
@@ -67,20 +58,11 @@ pub struct BackendClient {
 }
 
 impl BackendClient {
-    pub async fn connect(
-        auth_client: auth::AuthClient,
-        url: String,
-        credentials: auth::AccessTokenResponse,
-    ) -> Result<Self, DaemonError> {
+    pub async fn connect(url: String, access_token: String) -> Result<Self, DaemonError> {
         let http = reqwest::Client::new();
-        let response = request(
-            &http,
-            Method::GET,
-            &format!("{}/v1/me", url),
-            &credentials.access_token,
-        )
-        .send()
-        .await?;
+        let response = request(&http, Method::GET, &format!("{}/v1/me", url), &access_token)
+            .send()
+            .await?;
         if !response.status().is_success() {
             return Err(DaemonError::NoAnswer);
         }
@@ -88,9 +70,7 @@ impl BackendClient {
         let user_id = res.sub;
 
         Ok(Self {
-            auth: Arc::new(RwLock::new(credentials)),
-            auth_client,
-            auth_refreshing: AtomicBool::new(false),
+            access_token,
             network: Network::Signet,
             url,
             user_id,
@@ -113,11 +93,7 @@ impl BackendClient {
     }
 
     fn request<U: IntoUrl>(&self, method: Method, url: U) -> Result<RequestBuilder, DaemonError> {
-        let access_token = &self
-            .auth
-            .read()
-            .map_err(|e| DaemonError::Unexpected(e.to_string()))?
-            .access_token;
+        let access_token = &self.access_token;
         Ok(request(&self.http, method, url, access_token))
     }
 
@@ -315,15 +291,6 @@ impl BackendWalletClient {
         let res: api::ListCoins = response.json().await?;
         Ok(res)
     }
-
-    fn auth(&self) -> Result<AccessTokenResponse, DaemonError> {
-        Ok(self
-            .inner
-            .auth
-            .read()
-            .map_err(|e| DaemonError::Unexpected(e.to_string()))?
-            .clone())
-    }
 }
 
 #[async_trait]
@@ -340,25 +307,6 @@ impl Daemon for BackendWalletClient {
     /// auth_refreshing enforce that no other thread will try to refresh the
     /// access credentials in the same time.
     async fn is_alive(&self) -> Result<(), DaemonError> {
-        let auth = self.auth()?;
-        if auth.expires_at < Utc::now().timestamp() + 60
-            && !self.inner.auth_refreshing.load(Ordering::Relaxed)
-        {
-            self.inner.auth_refreshing.store(true, Ordering::Relaxed);
-            let new = self
-                .inner
-                .auth_client
-                .refresh_token(&auth.refresh_token)
-                .await?;
-            let mut old = self
-                .inner
-                .auth
-                .write()
-                .map_err(|e| DaemonError::Unexpected(e.to_string()))?;
-            *old = new;
-            tracing::info!("Liana backend access was refreshed");
-            self.inner.auth_refreshing.store(false, Ordering::Relaxed);
-        }
         Ok(())
     }
 
