@@ -3,11 +3,9 @@ pub mod api;
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
-    sync::Arc,
 };
 
 use async_trait::async_trait;
-use chrono::Utc;
 use liana::{
     commands::{CoinStatus, GetInfoDescriptors, LCSpendInfo, LabelItem},
     config::Config,
@@ -15,17 +13,15 @@ use liana::{
     miniscript::bitcoin::{address, psbt::Psbt, Address, Network, OutPoint, Txid},
 };
 use reqwest::{Error, IntoUrl, Method, RequestBuilder, Response};
-use tokio::sync::RwLock;
 
 use crate::{
-    app::settings::{AuthConfig, Settings},
     daemon::{model::*, Daemon, DaemonBackend, DaemonError},
     hw::HardwareWalletConfig,
 };
 
 use self::api::{UTXOKind, DEFAULT_OUTPOINTS_LIMIT};
 
-use super::auth::{self, AccessTokenResponse, AuthError};
+use super::auth::AuthError;
 
 impl From<Error> for DaemonError {
     fn from(value: Error) -> Self {
@@ -56,8 +52,7 @@ fn request<U: IntoUrl>(
 
 #[derive(Debug, Clone)]
 pub struct BackendClient {
-    pub auth: Arc<RwLock<auth::AccessTokenResponse>>,
-    auth_client: auth::AuthClient,
+    access_token: String,
 
     url: String,
     network: Network,
@@ -67,21 +62,11 @@ pub struct BackendClient {
 }
 
 impl BackendClient {
-    pub async fn connect(
-        auth_client: auth::AuthClient,
-        url: String,
-        credentials: auth::AccessTokenResponse,
-        network: Network,
-    ) -> Result<Self, DaemonError> {
+    pub async fn connect(url: String, access_token: String, network: Network) -> Result<Self, DaemonError> {
         let http = reqwest::Client::new();
-        let response = request(
-            &http,
-            Method::GET,
-            &format!("{}/v1/me", url),
-            &credentials.access_token,
-        )
-        .send()
-        .await?;
+        let response = request(&http, Method::GET, &format!("{}/v1/me", url), &access_token)
+            .send()
+            .await?;
         if !response.status().is_success() {
             return Err(DaemonError::NoAnswer);
         }
@@ -89,8 +74,7 @@ impl BackendClient {
         let user_id = res.sub;
 
         Ok(Self {
-            auth: Arc::new(RwLock::new(credentials)),
-            auth_client,
+            access_token,
             network,
             url,
             user_id,
@@ -99,7 +83,7 @@ impl BackendClient {
     }
 
     pub fn user_email(&self) -> &str {
-        &self.auth_client.email
+        ""
     }
 
     pub async fn connect_first(self) -> Result<(BackendWalletClient, api::Wallet), DaemonError> {
@@ -121,7 +105,7 @@ impl BackendClient {
     }
 
     async fn request<U: IntoUrl>(&self, method: Method, url: U) -> RequestBuilder {
-        let access_token = &self.auth.read().await.access_token;
+        let access_token = &self.access_token;
         request(&self.http, method, url, access_token)
     }
 
@@ -326,6 +310,10 @@ impl BackendWalletClient {
         self.inner.user_email()
     }
 
+    pub fn access_token(&self) -> String {
+        self.inner.access_token.clone()
+    }
+
     async fn get_wallet(&self) -> Result<api::Wallet, DaemonError> {
         let list = self.inner.list_wallets().await?;
         let wallet = list
@@ -494,10 +482,6 @@ impl BackendWalletClient {
         let res: api::ListCoins = response.json().await?;
         Ok(res)
     }
-
-    pub async fn auth(&self) -> AccessTokenResponse {
-        self.inner.auth.read().await.clone()
-    }
 }
 
 #[async_trait]
@@ -511,59 +495,7 @@ impl Daemon for BackendWalletClient {
     }
 
     /// refresh the token if close to expiration.
-    async fn is_alive(&self, datadir: &Path, network: Network) -> Result<(), DaemonError> {
-        let auth = self.auth().await;
-        if auth.expires_at < Utc::now().timestamp() + 60 {
-            match self.inner.auth.try_write() {
-                Err(_) => {
-                    // something is using the lock, we will try next time.
-                    return Ok(());
-                }
-                Ok(mut old) => {
-                    let new = self
-                        .inner
-                        .auth_client
-                        .refresh_token(&auth.refresh_token)
-                        .await?;
-
-                    let mut settings = Settings::from_file(datadir.to_path_buf(), network)
-                        .map_err(|e| {
-                            DaemonError::Unexpected(format!(
-                                "Cannot access to settings.json file: {}",
-                                e
-                            ))
-                        })?;
-
-                    if let Some(wallet_settings) = settings.wallets.iter_mut().find(|w| {
-                        if let Some(auth) = &w.remote_backend_auth {
-                            auth.wallet_id == self.wallet_uuid
-                        } else {
-                            false
-                        }
-                    }) {
-                        wallet_settings.remote_backend_auth = Some(AuthConfig {
-                            email: self.inner.auth_client.email.clone(),
-                            wallet_id: self.wallet_id(),
-                            refresh_token: new.refresh_token.clone(),
-                        });
-                    } else {
-                        tracing::info!("Wallet id was not found in the settings");
-                    }
-
-                    settings
-                        .to_file(datadir.to_path_buf(), network)
-                        .map_err(|e| {
-                            DaemonError::Unexpected(format!(
-                                "Cannot access to settings.json file: {}",
-                                e
-                            ))
-                        })?;
-
-                    *old = new;
-                    tracing::info!("Liana backend access was refreshed");
-                }
-            }
-        }
+    async fn is_alive(&self, _datadir: &Path, _network: Network) -> Result<(), DaemonError> {
         Ok(())
     }
 

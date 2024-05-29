@@ -15,7 +15,6 @@ use crate::{
         view, Error,
     },
     lianalite::client::{
-        self,
         auth::{AuthClient, AuthError},
         backend::{api, BackendClient},
     },
@@ -140,39 +139,39 @@ impl Step for RemoteBackendLogin {
                         .is_ok();
                     email.value = value;
                 }
-                Message::SelectBackend(message::SelectBackend::RequestOTP) => {
-                    if email.value.is_empty() {
-                        email.valid = false;
-                    } else if email.valid {
-                        let email = email.value.clone();
-                        let network = self.network;
-                        self.processing = true;
-                        self.connection_error = None;
-                        self.auth_error = None;
-                        return Command::perform(
-                            async move {
-                                let config =
-                                    client::get_service_config(network).await.map_err(|e| {
-                                        if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
-                                            Error::Unexpected(
-                                                "Remote servers are unresponsive".to_string(),
-                                            )
-                                        } else {
-                                            Error::Unexpected(e.to_string())
-                                        }
-                                    })?;
-                                let client = AuthClient::new(
-                                    config.auth_api_url,
-                                    config.auth_api_public_key,
-                                    email,
-                                );
-                                client.sign_in_otp().await?;
-                                Ok((client, config.backend_api_url))
-                            },
-                            |res| Message::SelectBackend(message::SelectBackend::OTPRequested(res)),
-                        );
-                    }
-                }
+                // Message::SelectBackend(message::SelectBackend::RequestOTP) => {
+                //     if email.value.is_empty() {
+                //         email.valid = false;
+                //     } else if email.valid {
+                //         let email = email.value.clone();
+                //         let network = self.network;
+                //         self.processing = true;
+                //         self.connection_error = None;
+                //         self.auth_error = None;
+                //         return Command::perform(
+                //             async move {
+                //                 let config =
+                //                     client::get_service_config(network).await.map_err(|e| {
+                //                         if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+                //                             Error::Unexpected(
+                //                                 "Remote servers are unresponsive".to_string(),
+                //                             )
+                //                         } else {
+                //                             Error::Unexpected(e.to_string())
+                //                         }
+                //                     })?;
+                //                 let client = AuthClient::new(
+                //                     config.auth_api_url,
+                //                     config.auth_api_public_key,
+                //                     email,
+                //                 );
+                //                 client.sign_in_otp().await?;
+                //                 Ok((client, config.backend_api_url))
+                //             },
+                //             |res| Message::SelectBackend(message::SelectBackend::OTPRequested(res)),
+                //         );
+                //     }
+                // }
                 Message::SelectBackend(message::SelectBackend::OTPRequested(res)) => {
                     self.processing = false;
                     match res {
@@ -226,23 +225,23 @@ impl Step for RemoteBackendLogin {
                         self.connection_error = Some(e);
                     }
                 }
-                Message::SelectBackend(message::SelectBackend::OTPEdited(value)) => {
-                    otp.value = value.trim().to_string();
-                    if otp.value.len() == 6 {
-                        let client = client.clone();
-                        let otp = otp.value.clone();
-                        let backend_api_url = backend_api_url.clone();
-                        self.processing = true;
-                        self.connection_error = None;
-                        self.auth_error = None;
-                        let network = self.network;
-                        return Command::perform(
-                            async move { connect(client, otp, backend_api_url, network).await },
-                            message::SelectBackend::Connected,
-                        )
-                        .map(Message::SelectBackend);
-                    }
-                }
+                // Message::SelectBackend(message::SelectBackend::OTPEdited(value)) => {
+                //     otp.value = value.trim().to_string();
+                //     if otp.value.len() == 6 {
+                //         let client = client.clone();
+                //         let otp = otp.value.clone();
+                //         let backend_api_url = backend_api_url.clone();
+                //         self.processing = true;
+                //         self.connection_error = None;
+                //         self.auth_error = None;
+                //         let network = self.network;
+                //         return Command::perform(
+                //             async move { connect(client, otp, backend_api_url, network).await },
+                //             message::SelectBackend::Connected,
+                //         )
+                //         .map(Message::SelectBackend);
+                //     }
+                // }
 
                 Message::SelectBackend(message::SelectBackend::Connected(res)) => {
                     self.processing = false;
@@ -331,13 +330,11 @@ impl Step for RemoteBackendLogin {
 }
 
 pub async fn connect(
-    auth: AuthClient,
     token: String,
     backend_api_url: String,
     network: Network,
 ) -> Result<context::RemoteBackend, Error> {
-    let access = auth.verify_otp(token.trim_end()).await?;
-    let client = BackendClient::connect(auth, backend_api_url, access.clone(), network).await?;
+    let client = BackendClient::connect(backend_api_url, token, network).await?;
     Ok(RemoteBackend::WithoutWallet(client))
 }
 

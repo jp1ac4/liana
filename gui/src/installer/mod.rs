@@ -630,8 +630,6 @@ pub async fn extract_remote_gui_settings(ctx: &Context, backend: &BackendWalletC
         .expect("LianaDescriptor.to_string() always include the checksum")
         .to_string();
 
-    let auth = backend.inner_client().auth.read().await;
-
     Settings {
         wallets: vec![WalletSetting {
             name: wallet_name(descriptor),
@@ -641,7 +639,7 @@ pub async fn extract_remote_gui_settings(ctx: &Context, backend: &BackendWalletC
             remote_backend_auth: Some(AuthConfig {
                 email: backend.user_email().to_string(),
                 wallet_id: backend.wallet_id(),
-                refresh_token: auth.refresh_token.clone(),
+                refresh_token: backend.access_token(),
             }),
         }],
     }
