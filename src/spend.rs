@@ -99,6 +99,7 @@ fn check_output_value(value: bitcoin::Amount) -> Result<(), SpendCreationError> 
 fn sanity_check_psbt(
     spent_desc: &descriptors::LianaDescriptor,
     psbt: &Psbt,
+    use_primary_path: bool,
 ) -> Result<(), SpendCreationError> {
     let tx = &psbt.unsigned_tx;
 
@@ -137,7 +138,7 @@ fn sanity_check_psbt(
     }
 
     // Check the feerate isn't insane.
-    let tx_vb = spent_desc.unsigned_tx_max_vbytes(tx);
+    let tx_vb = spent_desc.unsigned_tx_max_vbytes(tx, use_primary_path);
     let feerate_sats_vb = abs_fee
         .checked_div(tx_vb)
         .ok_or(SpendCreationError::InsaneFees(
@@ -575,6 +576,8 @@ pub struct CreateSpendRes {
 /// * `main_descriptor`: the multipath Liana descriptor, used to derive the addresses of the
 /// candidate coins.
 /// * `secp`: necessary to derive data from the descriptor.
+/// * `use_primary_path`: whether the primary spending path should be used when estimating
+/// satisfaction size.
 /// * `tx_getter`: an interface to get the wallet transaction for the prevouts of the transaction.
 /// Wouldn't be necessary if we only spent Taproot coins.
 /// * `destinations`: a list of addresses and amounts, one per recipient i.e. per output in the
@@ -589,9 +592,11 @@ pub struct CreateSpendRes {
 /// * `change_addr`: the address to use for a change output if we need to create one. Can be set to
 /// an external address (if combined with an empty list of `destinations` it's useful to sweep some
 /// or all coins of a wallet to an external address).
+#[allow(clippy::too_many_arguments)]
 pub fn create_spend(
     main_descriptor: &descriptors::LianaDescriptor,
     secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
+    use_primary_path: bool,
     tx_getter: &mut impl TxGetter,
     destinations: &[(SpendOutputAddress, bitcoin::Amount)],
     candidate_coins: &[CandidateCoin],
@@ -684,7 +689,7 @@ pub fn create_spend(
         }
         .into();
         let max_sat_wu = main_descriptor
-            .max_sat_weight()
+            .max_sat_weight(use_primary_path)
             .try_into()
             .expect("Weight must fit in a u32");
         select_coins_for_spend(
@@ -771,7 +776,7 @@ pub fn create_spend(
         inputs: psbt_ins,
         outputs: psbt_outs,
     };
-    sanity_check_psbt(main_descriptor, &psbt)?;
+    sanity_check_psbt(main_descriptor, &psbt, use_primary_path)?;
     // TODO: maybe check for common standardness rules (max size, ..)?
 
     Ok(CreateSpendRes {
