@@ -229,6 +229,21 @@ fn migrate_v3_to_v4(conn: &mut rusqlite::Connection) -> Result<(), SqliteDbError
     Ok(())
 }
 
+fn migrate_v4_to_v5(conn: &mut rusqlite::Connection) -> Result<(), SqliteDbError> {
+    db_exec(conn, |tx| {
+        tx.execute_batch(
+            "CREATE TABLE transactions (
+                id INTEGER PRIMARY KEY NOT NULL,
+                txid BLOB UNIQUE NOT NULL,
+                tx BLOB UNIQUE NOT NULL
+            );
+
+            UPDATE version SET version = 5;",
+        )
+    })?;
+    Ok(())
+}
+
 /// Check the database version and if necessary apply the migrations to upgrade it to the current
 /// one.
 pub fn maybe_apply_migration(db_path: &path::Path) -> Result<(), SqliteDbError> {
@@ -261,6 +276,11 @@ pub fn maybe_apply_migration(db_path: &path::Path) -> Result<(), SqliteDbError> 
                 log::warn!("Upgrading database from version 3 to version 4.");
                 migrate_v3_to_v4(&mut conn)?;
                 log::warn!("Migration from database version 3 to version 4 successful.");
+            }
+            4 => {
+                log::warn!("Upgrading database from version 4 to version 5.");
+                migrate_v4_to_v5(&mut conn)?;
+                log::warn!("Migration from database version 4 to version 5 successful.");
             }
             _ => return Err(SqliteDbError::UnsupportedVersion(version)),
         }

@@ -43,7 +43,7 @@ use miniscript::bitcoin::{
     secp256k1,
 };
 
-const DB_VERSION: i64 = 4;
+const DB_VERSION: i64 = 5;
 
 #[derive(Debug)]
 pub enum SqliteDbError {
@@ -2216,7 +2216,7 @@ CREATE TABLE labels (
     }
 
     #[test]
-    fn v3_to_v4_migration() {
+    fn v3_to_v5_migration() {
         let secp = secp256k1::Secp256k1::verification_only();
 
         // Create a database with version 3, using the old schema.
@@ -2396,9 +2396,9 @@ CREATE TABLE labels (
 
             // Migrate the DB.
             maybe_apply_migration(&db_path).unwrap();
-            assert!(conn.db_version() == 4);
+            assert_eq!(conn.db_version(), 5);
             maybe_apply_migration(&db_path).unwrap(); // Migrating twice will be a no-op.
-            assert!(conn.db_version() == 4);
+            assert!(conn.db_version() == 5);
             let coins_post = conn.coins(&[], &[]);
             assert_eq!(coins_pre, coins_post);
         }
@@ -2407,7 +2407,7 @@ CREATE TABLE labels (
     }
 
     #[test]
-    fn v0_to_v4_migration() {
+    fn v0_to_v5_migration() {
         let secp = secp256k1::Secp256k1::verification_only();
 
         // Create a database with version 0, using the old schema.
@@ -2427,7 +2427,7 @@ CREATE TABLE labels (
         {
             let mut conn = db.connection().unwrap();
             let version = conn.db_version();
-            assert_eq!(version, 4);
+            assert_eq!(version, 5);
 
             let txid_str = "0c62a990d20d54429e70859292e82374ba6b1b951a3ab60f26bb65fee5724ff7";
             let txid = LabelItem::from_str(txid_str, bitcoin::Network::Bitcoin).unwrap();

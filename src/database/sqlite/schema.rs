@@ -71,6 +71,13 @@ CREATE TABLE addresses (
     derivation_index INTEGER NOT NULL UNIQUE
 );
 
+/* Transactions for all wallets. */
+CREATE TABLE transactions (
+    id INTEGER PRIMARY KEY NOT NULL,
+    txid BLOB UNIQUE NOT NULL,
+    tx BLOB UNIQUE NOT NULL
+);
+
 /* Transactions we created that spend some of our coins. */
 CREATE TABLE spend_transactions (
     id INTEGER PRIMARY KEY NOT NULL,
