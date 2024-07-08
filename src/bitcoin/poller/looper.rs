@@ -156,6 +156,23 @@ fn update_coins(
     }
 }
 
+// Add missing transactions to the database.
+fn add_missing_txs(bit: &impl BitcoinInterface, db_conn: &mut Box<dyn DatabaseConnection>) {
+    let txids = db_conn.list_missing_txids();
+    log::debug!("Missing txids: {:?}", txids);
+    // Take chunks to avoid storing too many transactions in memory.
+    for chunk in txids.chunks(100) {
+        // Ignore any transactions that cannot be retrieved.
+        let txs: Vec<_> = chunk
+            .iter()
+            .filter_map(|txid| bit.wallet_transaction(txid).map(|(tx, _)| tx))
+            .collect();
+        if !txs.is_empty() {
+            db_conn.new_txs(&txs);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum TipUpdate {
     // The best block is still the same as in the previous poll.
@@ -242,6 +259,12 @@ fn updates(
     db_conn.unspend_coins(&updated_coins.expired_spending);
     db_conn.spend_coins(&updated_coins.spending);
     db_conn.confirm_spend(&updated_coins.spent);
+    // Add any missing transactions to the DB.
+    // This must come after the DB coins have been updated.
+    // If the tx has since been dropped, it doesn't matter: We won't be able to retrieve
+    // it now and then coins will be updated after the next poll and the tx will no longer
+    // be considered missing.
+    add_missing_txs(bit, db_conn);
     if latest_tip != current_tip {
         db_conn.update_tip(&latest_tip);
         log::debug!("New tip: '{}'", latest_tip);

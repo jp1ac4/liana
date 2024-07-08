@@ -682,6 +682,53 @@ impl SqliteConn {
         .expect("Db must not fail")
     }
 
+    /// Retrieve a list of deposit and spend transaction ids of coins in our database
+    /// that are missing from the transactions table.
+    pub fn db_list_missing_txids(&mut self) -> Vec<bitcoin::Txid> {
+        db_query(
+            &mut self.conn,
+            // Note that UNION removes duplicates
+            "SELECT txid \
+                FROM ( \
+                    SELECT txid FROM coins \
+                    WHERE wallet_id = (?1) \
+                    UNION \
+                    SELECT spend_txid AS txid FROM coins \
+                    WHERE wallet_id = (?1) \
+                    AND spend_txid IS NOT NULL \
+                ) c \
+                WHERE NOT EXISTS ( \
+                    SELECT 1 \
+                    FROM transactions \
+                    WHERE txid = c.txid \
+            )",
+            rusqlite::params![WALLET_ID],
+            |row| {
+                let txid: Vec<u8> = row.get(0)?;
+                let txid: bitcoin::Txid =
+                    encode::deserialize(&txid).expect("We only store valid txids");
+                Ok(txid)
+            },
+        )
+        .expect("Db must not fail")
+    }
+
+    pub fn new_txs(&mut self, txs: &[bitcoin::Transaction]) {
+        db_exec(&mut self.conn, |db_tx| {
+            for tx in txs {
+                let txid = &tx.txid()[..].to_vec();
+                let tx_ser = bitcoin::consensus::serialize(tx);
+                db_tx.execute(
+                    "INSERT INTO transactions (txid, tx) VALUES (?1, ?2) \
+                        ON CONFLICT DO NOTHING",
+                    rusqlite::params![txid, tx_ser,],
+                )?;
+            }
+            Ok(())
+        })
+        .expect("Database must be available")
+    }
+
     pub fn delete_spend(&mut self, txid: &bitcoin::Txid) {
         db_exec(&mut self.conn, |db_tx| {
             db_tx.execute(
