@@ -16,7 +16,7 @@ use crate::{
         sqlite::{
             schema::{
                 DbAddress, DbCoin, DbLabel, DbLabelledKind, DbSpendTransaction, DbTip, DbWallet,
-                SCHEMA,
+                DbWalletTransaction, SCHEMA,
             },
             utils::{
                 create_fresh_db, curr_timestamp, db_exec, db_query, db_tx_query, db_version,
@@ -727,6 +727,39 @@ impl SqliteConn {
             Ok(())
         })
         .expect("Database must be available")
+    }
+
+    pub fn list_wallet_transactions(
+        &mut self,
+        txids: &[bitcoin::Txid],
+    ) -> Vec<DbWalletTransaction> {
+        // The UNION will remove duplicates.
+        // We assume that a transaction's block info is the same in every coins row
+        // it appears in.
+        let query = format!(
+            "SELECT t.tx, c.blockheight, c.blocktime \
+            FROM transactions t \
+            INNER JOIN ( \
+                SELECT txid, blockheight, blocktime \
+                FROM coins \
+                WHERE wallet_id = {WALLET_ID} \
+                UNION \
+                SELECT spend_txid, spend_block_height, spend_block_time \
+                FROM coins \
+                WHERE wallet_id = {WALLET_ID} \
+                AND spend_txid IS NOT NULL \
+            ) c ON t.txid = c.txid \
+            WHERE t.txid in ({})",
+            txids
+                .iter()
+                .map(|txid| format!("x'{}'", FrontwardHexTxid(*txid)))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        db_query(&mut self.conn, &query, rusqlite::params![], |row| {
+            row.try_into()
+        })
+        .expect("Db must not fail")
     }
 
     pub fn delete_spend(&mut self, txid: &bitcoin::Txid) {
