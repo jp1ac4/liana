@@ -92,6 +92,7 @@ pub enum StartupError {
     DefaultDataDirNotFound,
     DatadirCreation(path::PathBuf, io::Error),
     MissingBitcoindConfig,
+    MissingBitcoinBackendConfig,
     Database(SqliteDbError),
     Bitcoind(BitcoindError),
     #[cfg(unix)]
@@ -115,6 +116,10 @@ impl fmt::Display for StartupError {
             Self::MissingBitcoindConfig => write!(
                 f,
                 "Our Bitcoin interface is bitcoind but we have no 'bitcoind_config' entry in the configuration."
+            ),
+            Self::MissingBitcoinBackendConfig => write!(
+                f,
+                "No Bitcoin backend entry in the configuration."
             ),
             Self::Database(e) => write!(f, "Error initializing database: '{}'.", e),
             Self::Bitcoind(e) => write!(f, "Error setting up bitcoind interface: '{}'.", e),
@@ -349,13 +354,13 @@ impl DaemonHandle {
         };
 
         // Now, set up the Bitcoin interface.
-        let bit = match bitcoin {
-            Some(bit) => sync::Arc::from(sync::Mutex::from(bit)),
-            None => sync::Arc::from(sync::Mutex::from(setup_bitcoind(
-                &config,
-                &data_dir,
-                fresh_data_dir,
-            )?)) as sync::Arc<sync::Mutex<dyn BitcoinInterface>>,
+        let bit = match (bitcoin, &config.bitcoin_backend) {
+            (Some(bit), _) => sync::Arc::from(sync::Mutex::from(bit)),
+            (None, Some(config::BitcoinBackend::Bitcoind(..))) => sync::Arc::from(
+                sync::Mutex::from(setup_bitcoind(&config, &data_dir, fresh_data_dir)?),
+            )
+                as sync::Arc<sync::Mutex<dyn BitcoinInterface>>,
+            _ => Err(StartupError::MissingBitcoinBackendConfig)?,
         };
 
         // If we are on a UNIX system and they told us to daemonize, do it now.
