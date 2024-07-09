@@ -226,8 +226,8 @@ fn setup_bitcoind(
     #[cfg(target_os = "windows")]
     let wo_path_str = wo_path_str.replace("\\\\?\\", "").replace("\\\\?", "");
 
-    let bitcoind_config = config
-        .bitcoind_config
+    let config::BitcoinBackend::Bitcoind(bitcoind_config) = config
+        .bitcoin_backend
         .as_ref()
         .ok_or(StartupError::MissingBitcoindConfig)?;
     let bitcoind = BitcoinD::new(bitcoind_config, wo_path_str)?;
@@ -723,7 +723,7 @@ mod tests {
         let change_desc = desc.change_descriptor().clone();
         let config = Config {
             bitcoin_config,
-            bitcoind_config: Some(bitcoind_config),
+            bitcoin_backend: Some(config::BitcoinBackend::Bitcoind(bitcoind_config)),
             data_dir: Some(data_dir),
             #[cfg(unix)]
             daemon: false,
