@@ -59,6 +59,10 @@ impl BitcoinInterface for DummyBitcoind {
         BlockChainTip { hash, height }
     }
 
+    fn block_hash(&self, _height: i32) -> Option<bitcoin::BlockHash> {
+        todo!()
+    }
+
     fn is_in_chain(&self, _: &BlockChainTip) -> bool {
         // No reorg
         true

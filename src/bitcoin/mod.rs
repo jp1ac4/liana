@@ -55,6 +55,9 @@ pub trait BitcoinInterface: Send {
     /// Get the timestamp set in the best block's header.
     fn tip_time(&self) -> Option<u32>;
 
+    /// Get the block hash in best chain at given height.
+    fn block_hash(&self, height: i32) -> Option<bitcoin::BlockHash>;
+
     /// Check whether this former tip is part of the current best chain.
     fn is_in_chain(&self, tip: &BlockChainTip) -> bool;
 
@@ -369,6 +372,10 @@ impl BitcoinInterface for d::BitcoinD {
         Some(self.get_block_stats(tip.hash)?.time)
     }
 
+    fn block_hash(&self, height: i32) -> Option<bitcoin::BlockHash> {
+        self.get_block_hash(height)
+    }
+
     fn wallet_transaction(
         &self,
         txid: &bitcoin::Txid,
@@ -404,6 +411,10 @@ impl BitcoinInterface for sync::Arc<sync::Mutex<dyn BitcoinInterface + 'static>>
 
     fn chain_tip(&self) -> BlockChainTip {
         self.lock().unwrap().chain_tip()
+    }
+
+    fn block_hash(&self, height: i32) -> Option<bitcoin::BlockHash> {
+        self.lock().unwrap().block_hash(height)
     }
 
     fn is_in_chain(&self, tip: &BlockChainTip) -> bool {
