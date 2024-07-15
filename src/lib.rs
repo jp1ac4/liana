@@ -210,16 +210,13 @@ fn setup_sqlite(
     Ok(sqlite)
 }
 
-fn setup_electrum(
-    config: &Config,
-) -> Result<Electrum, StartupError> {
-    let electrum_config = match config
-    .bitcoin_backend.as_ref() {
+fn setup_electrum(config: &Config) -> Result<Electrum, StartupError> {
+    let electrum_config = match config.bitcoin_backend.as_ref() {
         Some(config::BitcoinBackend::Electrum(electrum_config)) => electrum_config,
-        _ => Err(StartupError::MissingBitcoindConfig)? // TODO: fix error type
+        _ => Err(StartupError::MissingBitcoindConfig)?, // TODO: fix error type
     };
     let client = bdk_electrum::electrum_client::Client::new(&electrum_config.addr.to_string())
-    .map_err(|e| StartupError::MissingBitcoindConfig)?; // TODO: fix error type
+        .map_err(|e| StartupError::MissingBitcoindConfig)?; // TODO: fix error type
 }
 
 // Connect to bitcoind. Setup the watchonly wallet, and do some sanity checks.

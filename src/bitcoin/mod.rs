@@ -10,10 +10,13 @@ use crate::{
     bitcoin::d::{BitcoindError, CachedTxGetter, LSBlockEntry},
     descriptors,
 };
-use bdk_electrum::electrum_client::{ElectrumApi, HeaderNotification};
+use bdk_electrum::{
+    bdk_chain::local_chain::CheckPoint,
+    electrum_client::{ElectrumApi, Error, HeaderNotification},
+};
 pub use d::{MempoolEntry, SyncProgress};
 
-use std::{fmt, sync};
+use std::{collections::BTreeMap, convert::TryInto, fmt, sync};
 
 use miniscript::bitcoin::{self, address};
 
@@ -527,10 +530,6 @@ impl BitcoinInterface for electrum::Electrum {
         BlockChainTip { hash, height: 0 }
     }
 
-    fn sync_progress(&self) -> SyncProgress {
-        todo!()
-    }
-
     fn chain_tip(&self) -> BlockChainTip {
         let HeaderNotification { height, .. } = self.client.block_headers_subscribe().unwrap();
         let new_tip_height = height as i32;
@@ -541,194 +540,87 @@ impl BitcoinInterface for electrum::Electrum {
         }
     }
 
+    fn block_hash(&self, height: i32) -> Option<bitcoin::BlockHash> {
+        let hash = self
+            .client
+            .block_header(height.try_into().unwrap())
+            .expect("msg")
+            .block_hash();
+        Some(hash)
+    }
+
     fn is_in_chain(&self, tip: &BlockChainTip) -> bool {
-        self.get_block_hash(tip.height)
+        self.block_hash(tip.height)
             .map(|bh| bh == tip.hash)
             .unwrap_or(false)
     }
 
-    fn received_coins(
-        &self,
-        tip: &BlockChainTip,
-        descs: &[descriptors::SinglePathLianaDesc],
-    ) -> Vec<UTxO> {
-        let lsb_res = self.list_since_block(&tip.hash);
-
-        lsb_res
-            .received_coins
-            .into_iter()
-            .filter_map(|entry| {
-                let LSBlockEntry {
-                    outpoint,
-                    amount,
-                    block_height,
-                    address,
-                    parent_descs,
-                    is_immature,
-                } = entry;
-                if parent_descs
-                    .iter()
-                    .any(|parent_desc| descs.iter().any(|desc| desc == parent_desc))
-                {
-                    Some(UTxO {
-                        outpoint,
-                        amount,
-                        block_height,
-                        address,
-                        is_immature,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    fn confirmed_coins(
-        &self,
-        outpoints: &[bitcoin::OutPoint],
-    ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
-        // The confirmed and expired coins to be returned.
-        let mut confirmed = Vec::with_capacity(outpoints.len());
-        let mut expired = Vec::new();
-        // Cached calls to `gettransaction`.
-        let mut tx_getter = CachedTxGetter::new(self);
-
-        for op in outpoints {
-            let res = if let Some(res) = tx_getter.get_transaction(&op.txid) {
-                res
-            } else {
-                log::error!("Transaction not in wallet for coin '{}'.", op);
-                continue;
-            };
-
-            // If the transaction was confirmed, mark the coin as such.
-            if let Some(block) = res.block {
-                // Do not mark immature coinbase deposits as confirmed until they become mature.
-                if res.is_coinbase && res.confirmations < COINBASE_MATURITY {
-                    log::debug!("Coin at '{}' comes from an immature coinbase transaction with {} confirmations. Not marking it as confirmed for now.", op, res.confirmations);
-                    continue;
-                }
-                confirmed.push((*op, block.height, block.time));
-                continue;
-            }
-
-            // If the transaction was dropped from the mempool, discard the coin.
-            if !self.is_in_mempool(&op.txid) {
-                expired.push(*op);
-            }
-        }
-
-        (confirmed, expired)
-    }
-
-    fn spending_coins(
-        &self,
-        outpoints: &[bitcoin::OutPoint],
-    ) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)> {
-        let mut spent = Vec::with_capacity(outpoints.len());
-
-        for op in outpoints {
-            if self.is_spent(op) {
-                let spending_txid = if let Some(txid) = self.get_spender_txid(op) {
-                    txid
-                } else {
-                    // TODO: better handling of this edge case.
-                    log::error!(
-                        "Could not get spender of '{}'. Not reporting it as spending.",
-                        op
-                    );
-                    continue;
-                };
-
-                spent.push((*op, spending_txid));
-            }
-        }
-
-        spent
-    }
-
-    fn spent_coins(
-        &self,
-        outpoints: &[(bitcoin::OutPoint, bitcoin::Txid)],
-    ) -> (
-        Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
-        Vec<bitcoin::OutPoint>,
-    ) {
-        // Spend coins to be returned.
-        let mut spent = Vec::with_capacity(outpoints.len());
-        // Coins whose spending transaction isn't in our local mempool anymore.
-        let mut expired = Vec::new();
-        // Cached calls to `gettransaction`.
-        let mut tx_getter = CachedTxGetter::new(self);
-
-        for (op, txid) in outpoints {
-            let res = if let Some(res) = tx_getter.get_transaction(txid) {
-                res
-            } else {
-                log::error!("Could not get tx {} spending coin {}.", txid, op);
-                continue;
-            };
-
-            // If the transaction was confirmed, mark it as such.
-            if let Some(block) = res.block {
-                spent.push((*op, *txid, block));
-                continue;
-            }
-
-            // If a conflicting transaction was confirmed instead, replace the txid of the
-            // spender for this coin with it and mark it as confirmed.
-            let conflict = res.conflicting_txs.iter().find_map(|txid| {
-                tx_getter.get_transaction(txid).and_then(|tx| {
-                    tx.block.and_then(|block| {
-                        // Being part of our watchonly wallet isn't enough, as it could be a
-                        // conflicting transaction which spends a different set of coins. Make sure
-                        // it does actually spend this coin.
-                        tx.tx.input.iter().find_map(|txin| {
-                            if &txin.previous_output == op {
-                                Some((*txid, block))
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                })
-            });
-            if let Some((txid, block)) = conflict {
-                spent.push((*op, txid, block));
-                continue;
-            }
-
-            // If the transaction was not confirmed, a conflicting transaction spending this coin
-            // too wasn't mined, but still isn't in our mempool anymore, mark the spend as expired.
-            if !self.is_in_mempool(txid) {
-                expired.push(*op);
-            }
-        }
-
-        (spent, expired)
-    }
-
     fn common_ancestor(&self, tip: &BlockChainTip) -> Option<BlockChainTip> {
-        let mut stats = self.get_block_stats(tip.hash)?;
-        let mut ancestor = *tip;
+        let new_tip_height = tip.height as u32;
 
-        while stats.confirmations == -1 {
-            stats = self.get_block_stats(stats.previous_blockhash?)?;
-            ancestor = BlockChainTip {
-                hash: stats.blockhash,
-                height: stats.height,
-            };
-        }
+        //     // If electrum returns a tip height that is lower than our previous tip, then checkpoints do
+        //     // not need updating. We just return the previous tip and use that as the point of agreement.
+        //     if new_tip_height < prev_tip.height() {
+        //         return Ok((prev_tip.clone(), Some(prev_tip.height())));
+        //     }
 
-        Some(ancestor)
+        const CHAIN_SUFFIX_LENGTH: u32 = 8;
+        //     // Atomically fetch the latest `CHAIN_SUFFIX_LENGTH` count of blocks from Electrum. We use this
+        //     // to construct our checkpoint update.
+        let mut new_blocks = {
+            let start_height = new_tip_height.saturating_sub(CHAIN_SUFFIX_LENGTH - 1);
+            let hashes = self
+                .client
+                .block_headers(start_height as _, CHAIN_SUFFIX_LENGTH as _)
+                .unwrap()
+                .headers
+                .into_iter()
+                .map(|h| h.block_hash());
+            (start_height..).zip(hashes).collect::<BTreeMap<u32, _>>()
+        };
+
+        // Find the "point of agreement" (if any).
+        let agreement_cp = {
+            let mut agreement_cp = Option::<CheckPoint>::None;
+            for cp in self
+                .prev_tip
+                .iter()
+                .filter(|cp| cp.height() <= new_tip_height)
+            {
+                let cp_block = cp.block_id();
+                let hash = match new_blocks.get(&cp_block.height) {
+                    Some(&hash) => hash,
+                    None => {
+                        assert!(
+                            new_tip_height >= cp_block.height,
+                            "already checked that new tip cannot be smaller"
+                        );
+                        let hash = self
+                            .client
+                            .block_header(cp_block.height as _)
+                            .unwrap()
+                            .block_hash();
+                        new_blocks.insert(cp_block.height, hash);
+                        hash
+                    }
+                };
+                if hash == cp_block.hash {
+                    agreement_cp = Some(cp);
+                    break;
+                }
+            }
+            agreement_cp
+        };
+        agreement_cp.as_ref().map(|cp| BlockChainTip {
+            height: cp.height().try_into().unwrap(),
+            hash: cp.hash(),
+        })
     }
 
     fn broadcast_tx(&self, tx: &bitcoin::Transaction) -> Result<(), String> {
-        match self.broadcast_tx(tx) {
-            Ok(()) => Ok(()),
-            Err(BitcoindError::Server(e)) => Err(e.to_string()),
-            // We assume the Bitcoin backend doesn't fail, so it must be a JSONRPC error.
+        match self.client.transaction_broadcast(tx) {
+            Ok(_txid) => Ok(()),
+            // TODO: check for which error types we shouldn't panic
             Err(e) => panic!(
                 "Unexpected Bitcoin error when broadcast transaction: '{}'.",
                 e
@@ -736,48 +628,218 @@ impl BitcoinInterface for electrum::Electrum {
         }
     }
 
+    fn wallet_transaction(
+        &self,
+        txid: &bitcoin::Txid,
+    ) -> Option<(bitcoin::Transaction, Option<Block>)> {
+        self.graph.graph().get_tx_node(*txid).map(|tx_node| {
+            let block = tx_node.anchors.first().map(|info| Block {
+                hash: info.hash,
+                height: info.height,
+                time: 0,
+            });
+            let tx = tx_node.tx.as_ref().clone();
+            (tx, block)
+        })
+    }
+
+    fn mempool_entry(&self, txid: &bitcoin::Txid) -> Option<MempoolEntry> {
+        None
+    }
+
+    fn mempool_spenders(&self, outpoints: &[bitcoin::OutPoint]) -> Vec<MempoolEntry> {
+        Vec::new()
+    }
+
+    fn sync_progress(&self) -> SyncProgress {
+        // FIXME
+        let blocks = self.chain_tip().height as u64;
+        SyncProgress::new(1.0, blocks, blocks)
+    }
+
     fn start_rescan(
         &self,
         desc: &descriptors::LianaDescriptor,
         timestamp: u32,
     ) -> Result<(), String> {
-        // FIXME: in theory i think this could potentially fail to actually start the rescan.
-        self.start_rescan(desc, timestamp)
-            .map_err(|e| e.to_string())
+        todo!()
     }
 
     fn rescan_progress(&self) -> Option<f64> {
-        self.rescan_progress()
+        unimplemented!("db should not be marked as rescanning")
     }
 
     fn block_before_date(&self, timestamp: u32) -> Option<BlockChainTip> {
-        self.tip_before_timestamp(timestamp)
+        unimplemented!("db should not be marked as rescanning")
     }
 
     fn tip_time(&self) -> Option<u32> {
-        let tip = self.chain_tip();
-        Some(self.get_block_stats(tip.hash)?.time)
-    }
-
-    fn block_hash(&self, height: i32) -> Option<bitcoin::BlockHash> {
-        self.get_block_hash(height)
-    }
-
-    fn wallet_transaction(
-        &self,
-        txid: &bitcoin::Txid,
-    ) -> Option<(bitcoin::Transaction, Option<Block>)> {
-        self.get_transaction(txid).map(|res| (res.tx, res.block))
-    }
-
-    fn mempool_spenders(&self, outpoints: &[bitcoin::OutPoint]) -> Vec<MempoolEntry> {
-        self.mempool_txs_spending_prevouts(outpoints)
-            .into_iter()
-            .filter_map(|txid| self.mempool_entry(&txid))
-            .collect()
-    }
-
-    fn mempool_entry(&self, txid: &bitcoin::Txid) -> Option<MempoolEntry> {
-        self.mempool_entry(txid)
+        todo!()
     }
 }
+
+// impl BitcoinInterface for electrum::Electrum {
+
+//     fn received_coins(
+//         &self,
+//         tip: &BlockChainTip,
+//         descs: &[descriptors::SinglePathLianaDesc],
+//     ) -> Vec<UTxO> {
+//         let lsb_res = self.list_since_block(&tip.hash);
+
+//         lsb_res
+//             .received_coins
+//             .into_iter()
+//             .filter_map(|entry| {
+//                 let LSBlockEntry {
+//                     outpoint,
+//                     amount,
+//                     block_height,
+//                     address,
+//                     parent_descs,
+//                     is_immature,
+//                 } = entry;
+//                 if parent_descs
+//                     .iter()
+//                     .any(|parent_desc| descs.iter().any(|desc| desc == parent_desc))
+//                 {
+//                     Some(UTxO {
+//                         outpoint,
+//                         amount,
+//                         block_height,
+//                         address,
+//                         is_immature,
+//                     })
+//                 } else {
+//                     None
+//                 }
+//             })
+//             .collect()
+//     }
+
+//     fn confirmed_coins(
+//         &self,
+//         outpoints: &[bitcoin::OutPoint],
+//     ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
+//         // The confirmed and expired coins to be returned.
+//         let mut confirmed = Vec::with_capacity(outpoints.len());
+//         let mut expired = Vec::new();
+//         // Cached calls to `gettransaction`.
+//         let mut tx_getter = CachedTxGetter::new(self);
+
+//         for op in outpoints {
+//             let res = if let Some(res) = tx_getter.get_transaction(&op.txid) {
+//                 res
+//             } else {
+//                 log::error!("Transaction not in wallet for coin '{}'.", op);
+//                 continue;
+//             };
+
+//             // If the transaction was confirmed, mark the coin as such.
+//             if let Some(block) = res.block {
+//                 // Do not mark immature coinbase deposits as confirmed until they become mature.
+//                 if res.is_coinbase && res.confirmations < COINBASE_MATURITY {
+//                     log::debug!("Coin at '{}' comes from an immature coinbase transaction with {} confirmations. Not marking it as confirmed for now.", op, res.confirmations);
+//                     continue;
+//                 }
+//                 confirmed.push((*op, block.height, block.time));
+//                 continue;
+//             }
+
+//             // If the transaction was dropped from the mempool, discard the coin.
+//             if !self.is_in_mempool(&op.txid) {
+//                 expired.push(*op);
+//             }
+//         }
+
+//         (confirmed, expired)
+//     }
+
+//     fn spending_coins(
+//         &self,
+//         outpoints: &[bitcoin::OutPoint],
+//     ) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)> {
+//         let mut spent = Vec::with_capacity(outpoints.len());
+
+//         for op in outpoints {
+//             if self.is_spent(op) {
+//                 let spending_txid = if let Some(txid) = self.get_spender_txid(op) {
+//                     txid
+//                 } else {
+//                     // TODO: better handling of this edge case.
+//                     log::error!(
+//                         "Could not get spender of '{}'. Not reporting it as spending.",
+//                         op
+//                     );
+//                     continue;
+//                 };
+
+//                 spent.push((*op, spending_txid));
+//             }
+//         }
+
+//         spent
+//     }
+
+//     fn spent_coins(
+//         &self,
+//         outpoints: &[(bitcoin::OutPoint, bitcoin::Txid)],
+//     ) -> (
+//         Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
+//         Vec<bitcoin::OutPoint>,
+//     ) {
+//         // Spend coins to be returned.
+//         let mut spent = Vec::with_capacity(outpoints.len());
+//         // Coins whose spending transaction isn't in our local mempool anymore.
+//         let mut expired = Vec::new();
+//         // Cached calls to `gettransaction`.
+//         let mut tx_getter = CachedTxGetter::new(self);
+
+//         for (op, txid) in outpoints {
+//             let res = if let Some(res) = tx_getter.get_transaction(txid) {
+//                 res
+//             } else {
+//                 log::error!("Could not get tx {} spending coin {}.", txid, op);
+//                 continue;
+//             };
+
+//             // If the transaction was confirmed, mark it as such.
+//             if let Some(block) = res.block {
+//                 spent.push((*op, *txid, block));
+//                 continue;
+//             }
+
+//             // If a conflicting transaction was confirmed instead, replace the txid of the
+//             // spender for this coin with it and mark it as confirmed.
+//             let conflict = res.conflicting_txs.iter().find_map(|txid| {
+//                 tx_getter.get_transaction(txid).and_then(|tx| {
+//                     tx.block.and_then(|block| {
+//                         // Being part of our watchonly wallet isn't enough, as it could be a
+//                         // conflicting transaction which spends a different set of coins. Make sure
+//                         // it does actually spend this coin.
+//                         tx.tx.input.iter().find_map(|txin| {
+//                             if &txin.previous_output == op {
+//                                 Some((*txid, block))
+//                             } else {
+//                                 None
+//                             }
+//                         })
+//                     })
+//                 })
+//             });
+//             if let Some((txid, block)) = conflict {
+//                 spent.push((*op, txid, block));
+//                 continue;
+//             }
+
+//             // If the transaction was not confirmed, a conflicting transaction spending this coin
+//             // too wasn't mined, but still isn't in our mempool anymore, mark the spend as expired.
+//             if !self.is_in_mempool(txid) {
+//                 expired.push(*op);
+//             }
+//         }
+
+//         (spent, expired)
+//     }
+
+// }
