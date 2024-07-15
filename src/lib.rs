@@ -231,10 +231,11 @@ fn setup_bitcoind(
     #[cfg(target_os = "windows")]
     let wo_path_str = wo_path_str.replace("\\\\?\\", "").replace("\\\\?", "");
 
-    let config::BitcoinBackend::Bitcoind(bitcoind_config) = config
-        .bitcoin_backend
-        .as_ref()
-        .ok_or(StartupError::MissingBitcoindConfig)?;
+    let bitcoind_config = match config
+    .bitcoin_backend.as_ref() {
+        Some(config::BitcoinBackend::Bitcoind(bitcoind_config)) => bitcoind_config,
+        _ => Err(StartupError::MissingBitcoindConfig)?
+    };
     let bitcoind = BitcoinD::new(bitcoind_config, wo_path_str)?;
     bitcoind.node_sanity_checks(
         config.bitcoin_config.network,
