@@ -91,6 +91,8 @@ pub enum BitcoinBackend {
     /// Settings specific to bitcoind as the Bitcoin interface.
     #[serde(rename = "bitcoind_config")]
     Bitcoind(BitcoindConfig),
+    #[serde(rename = "electrum_config")]
+    Electrum(ElectrumConfig),
 }
 
 /// RPC authentication options.
@@ -134,6 +136,13 @@ pub struct BitcoinConfig {
         default = "default_poll_interval"
     )]
     pub poll_interval_secs: Duration,
+}
+
+/// Everything we need to know for talking to bitcoind serenely
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ElectrumConfig {
+    /// The IP:port bitcoind's RPC is listening on
+    pub addr: SocketAddr,
 }
 
 /// Static informations we require to operate

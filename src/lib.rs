@@ -13,7 +13,9 @@ pub mod spend;
 #[cfg(test)]
 mod testutils;
 
+use bdk_electrum::electrum_client::ElectrumApi;
 pub use bip39;
+use bitcoin::electrum::Electrum;
 pub use miniscript;
 
 pub use crate::bitcoin::d::{BitcoinD, BitcoindError, WalletError};
@@ -208,6 +210,18 @@ fn setup_sqlite(
     Ok(sqlite)
 }
 
+fn setup_electrum(
+    config: &Config,
+) -> Result<Electrum, StartupError> {
+    let electrum_config = match config
+    .bitcoin_backend.as_ref() {
+        Some(config::BitcoinBackend::Electrum(electrum_config)) => electrum_config,
+        _ => Err(StartupError::MissingBitcoindConfig)? // TODO: fix error type
+    };
+    let client = bdk_electrum::electrum_client::Client::new(&electrum_config.addr.to_string())
+    .map_err(|e| StartupError::MissingBitcoindConfig)?; // TODO: fix error type
+}
+
 // Connect to bitcoind. Setup the watchonly wallet, and do some sanity checks.
 // If all went well, returns the interface to bitcoind.
 fn setup_bitcoind(
@@ -359,6 +373,10 @@ impl DaemonHandle {
             (Some(bit), _) => sync::Arc::from(sync::Mutex::from(bit)),
             (None, Some(config::BitcoinBackend::Bitcoind(..))) => sync::Arc::from(
                 sync::Mutex::from(setup_bitcoind(&config, &data_dir, fresh_data_dir)?),
+            )
+                as sync::Arc<sync::Mutex<dyn BitcoinInterface>>,
+            (None, Some(config::BitcoinBackend::Bitcoind(..))) => sync::Arc::from(
+                sync::Mutex::from(setup_electrum(&config, &data_dir, fresh_data_dir)?),
             )
                 as sync::Arc<sync::Mutex<dyn BitcoinInterface>>,
             _ => Err(StartupError::MissingBitcoinBackendConfig)?,
