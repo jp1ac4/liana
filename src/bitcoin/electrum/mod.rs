@@ -274,7 +274,11 @@ fn local_chain_from_db(
 // }
 
 fn list_transactions(db_conn: &mut Box<dyn DatabaseConnection>) -> Vec<Transaction> {
-    let txids = db_conn.list_txids(u32::MIN, u32::MAX, u64::MAX);
+    let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+    let txids = db_conn.list_txids(u32::MIN, now, 1000);
     db_conn
         .list_wallet_transactions(&txids)
         .into_iter()

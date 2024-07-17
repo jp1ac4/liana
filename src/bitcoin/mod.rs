@@ -843,7 +843,7 @@ impl BitcoinInterface for electrum::Electrum {
     }
 
     fn rescan_progress(&self) -> Option<f64> {
-        unimplemented!("db should not be marked as rescanning")
+        None
     }
 
     fn block_before_date(&self, timestamp: u32) -> Option<BlockChainTip> {
