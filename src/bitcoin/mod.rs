@@ -20,8 +20,13 @@ use bdk_electrum::{
     electrum_client::{ElectrumApi, Error, HeaderNotification},
 };
 pub use d::{MempoolEntry, SyncProgress};
+use electrum::coins_from_wallet;
 
-use std::{collections::BTreeMap, convert::TryInto, fmt, sync};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    convert::TryInto,
+    fmt, sync,
+};
 
 use miniscript::bitcoin::{self, address, secp256k1};
 
@@ -529,6 +534,157 @@ pub struct UTxO {
 }
 
 impl BitcoinInterface for electrum::Electrum {
+    fn sync(
+        &mut self,
+        //db_conn: &mut Box<dyn DatabaseConnection>,
+    ) {
+        self.bdk_wallet.existing_coins = self.bdk_wallet.wallet_coins.clone();
+        sync_through_bdk(&mut self.bdk_wallet, &self.client);
+        self.bdk_wallet.wallet_coins = coins_from_wallet(&self.bdk_wallet)
+            .into_iter()
+            .map(|c| (c.outpoint, c))
+            .collect();
+    }
+
+    fn update_coins(
+        &self,
+        db_conn: &mut Box<dyn DatabaseConnection>,
+        previous_tip: &BlockChainTip,
+        descs: &[descriptors::SinglePathLianaDesc],
+        secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
+    ) -> UpdatedCoins {
+        // let receive_desc = descs.first().unwrap();
+        // let change_desc = descs.last().unwrap();
+        let existing_coins = self.bdk_wallet.existing_coins.clone();
+        let wallet_coins = self.bdk_wallet.wallet_coins.clone();
+        let updated_coins: HashMap<_, _> = wallet_coins
+        .iter()
+        .filter_map(|c|
+            // Keep new and updated
+            if existing_coins.get(c.0) != Some(c.1) {
+                Some(c)
+                // let desc_to_use = if c.is_change { change_desc } else { receive_desc };
+                // Some(UTxO {
+                //     outpoint: *op,
+                //     block_height: c.block_info.map(|info| info.height),
+                //     amount: c.amount,
+                //     address: desc_to_use.derive(c.derivation_index, &secp).address(self.bdk_wallet.network).as_unchecked().clone(),
+                //     is_immature: c.is_immature,
+            } else {
+                None
+            }
+        ).collect();
+
+        let received: Vec<_> = wallet_coins
+            .values()
+            .filter_map(|c| {
+                if !existing_coins.contains_key(&c.outpoint) {
+                    Some(Coin {
+                        outpoint: c.outpoint,
+                        is_immature: c.is_immature,
+                        block_info: c.block_info.map(|info| BlockInfo {
+                            height: info.height,
+                            time: info.time,
+                        }),
+                        amount: c.amount,
+                        derivation_index: c.derivation_index,
+                        is_change: c.is_change,
+                        spend_txid: c.spend_txid,
+                        spend_block: c.spend_block.map(|info| BlockInfo {
+                            height: info.height,
+                            time: info.time,
+                        }),
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let confirmed: Vec<_> = updated_coins
+            .iter()
+            .filter_map(|(op, c)| {
+                c.block_info
+                    .map(|info| (op.clone().clone(), info.height, info.time))
+            })
+            .collect();
+        let expired: Vec<_> = existing_coins
+            .keys()
+            .filter(|c| !wallet_coins.contains_key(c))
+            .cloned()
+            .collect();
+        let expired_spending: Vec<_> = existing_coins
+            .iter()
+            .filter(|c| c.1.spend_txid.is_some() && c.1.spend_block.is_none())
+            .filter_map(|c| {
+                wallet_coins
+                    .get(c.0)
+                    .filter(|wc| wc.spend_txid != Some(c.1.spend_txid.unwrap()))
+            })
+            .map(|c| c.outpoint)
+            .collect();
+        let spending: Vec<_> = updated_coins
+            .iter()
+            .filter_map(|c| {
+                if c.1.spend_block.is_none() {
+                    c.1.spend_txid.map(|txid| (c.0.clone().clone(), txid))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let spent: Vec<_> = updated_coins
+            .into_iter()
+            .filter_map(|(op, c)| {
+                c.spend_block
+                    .map(|info| (op.clone(), c.spend_txid.unwrap(), info.height, info.time))
+            })
+            .collect();
+
+        UpdatedCoins {
+            received,
+            confirmed,
+            expired,
+            expired_spending,
+            spending,
+            spent,
+        }
+    }
+
+    // fn received_coins(
+    //         &self,
+    //         tip: &BlockChainTip,
+    //         descs: &[descriptors::SinglePathLianaDesc],
+    //     ) -> Vec<UTxO> {
+    //     let secp = secp256k1::Secp256k1::verification_only();
+    //     let receive_desc = descs.first().unwrap();
+    //     let change_desc = descs.last().unwrap();
+    //     let existing_coins = self.bdk_wallet.existing_coins;
+    //     let wallet_coins = self.bdk_wallet.wallet_coins;
+    //     wallet_coins
+    //     .iter()
+    //     .filter_map(|(op, c)|
+    //         if !existing_coins.contains_key(op) {
+    //             let desc_to_use = if c.is_change { change_desc } else { receive_desc };
+    //             Some(UTxO {
+    //                 outpoint: *op,
+    //                 block_height: c.block_info.map(|info| info.height),
+    //                 amount: c.amount,
+    //                 address: desc_to_use.derive(c.derivation_index, &secp).address(self.bdk_wallet.network).as_unchecked().clone(),
+    //                 is_immature: c.is_immature,
+    //             })
+    //         } else {
+    //             None
+    //         }
+    //     ).collect()
+    // }
+
+    // fn confirmed_coins(
+    //         &self,
+    //         outpoints: &[bitcoin::OutPoint],
+    //     ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
+
+    // }
+
     fn genesis_block_timestamp(&self) -> u32 {
         self.client
             .block_header(0)
@@ -598,7 +754,9 @@ impl BitcoinInterface for electrum::Electrum {
         let agreement_cp = {
             let mut agreement_cp = Option::<CheckPoint>::None;
             for cp in self
-                .prev_tip
+                .bdk_wallet
+                .local_chain
+                .tip()
                 .iter()
                 .filter(|cp| cp.height() <= new_tip_height)
             {
@@ -647,15 +805,19 @@ impl BitcoinInterface for electrum::Electrum {
         &self,
         txid: &bitcoin::Txid,
     ) -> Option<(bitcoin::Transaction, Option<Block>)> {
-        self.graph.graph().get_tx_node(*txid).map(|tx_node| {
-            let block = tx_node.anchors.first().map(|info| Block {
-                hash: info.hash,
-                height: info.height,
-                time: 0,
-            });
-            let tx = tx_node.tx.as_ref().clone();
-            (tx, block)
-        })
+        self.bdk_wallet
+            .graph
+            .graph()
+            .get_tx_node(*txid)
+            .map(|tx_node| {
+                let block = tx_node.anchors.first().map(|info| Block {
+                    hash: info.hash,
+                    height: info.height,
+                    time: 0,
+                });
+                let tx = tx_node.tx.as_ref().clone();
+                (tx, block)
+            })
     }
 
     fn mempool_entry(&self, txid: &bitcoin::Txid) -> Option<MempoolEntry> {
