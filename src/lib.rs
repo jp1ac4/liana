@@ -15,7 +15,7 @@ mod testutils;
 
 use bdk_electrum::electrum_client::ElectrumApi;
 pub use bip39;
-use bitcoin::electrum::Electrum;
+use bitcoin::electrum::{bdk_wallet_from_db, BdkWallet, Electrum};
 pub use miniscript;
 
 pub use crate::bitcoin::d::{BitcoinD, BitcoindError, WalletError};
@@ -26,7 +26,7 @@ use crate::{
     config::Config,
     database::{
         sqlite::{FreshDbOptions, SqliteDb, SqliteDbError},
-        DatabaseInterface,
+        DatabaseConnection, DatabaseInterface,
     },
 };
 
@@ -210,13 +210,21 @@ fn setup_sqlite(
     Ok(sqlite)
 }
 
-fn setup_electrum(config: &Config) -> Result<Electrum, StartupError> {
+fn setup_electrum(config: &Config, db: &impl DatabaseInterface) -> Result<Electrum, StartupError> {
     let electrum_config = match config.bitcoin_backend.as_ref() {
         Some(config::BitcoinBackend::Electrum(electrum_config)) => electrum_config,
         _ => Err(StartupError::MissingBitcoindConfig)?, // TODO: fix error type
     };
     let client = bdk_electrum::electrum_client::Client::new(&electrum_config.addr.to_string())
         .map_err(|e| StartupError::MissingBitcoindConfig)?; // TODO: fix error type
+    let mut db_conn = db.connection();
+    let descs = vec![
+        config.main_descriptor.receive_descriptor().clone(),
+        config.main_descriptor.change_descriptor().clone(),
+    ];
+    let bdk_wallet = bdk_wallet_from_db(&mut db_conn, &client, &descs).unwrap();
+    let ele = Electrum { client, bdk_wallet };
+    Ok(ele)
 }
 
 // Connect to bitcoind. Setup the watchonly wallet, and do some sanity checks.
@@ -371,10 +379,10 @@ impl DaemonHandle {
                 sync::Mutex::from(setup_bitcoind(&config, &data_dir, fresh_data_dir)?),
             )
                 as sync::Arc<sync::Mutex<dyn BitcoinInterface>>,
-            (None, Some(config::BitcoinBackend::Bitcoind(..))) => sync::Arc::from(
-                sync::Mutex::from(setup_electrum(&config, &data_dir, fresh_data_dir)?),
-            )
-                as sync::Arc<sync::Mutex<dyn BitcoinInterface>>,
+            (None, Some(config::BitcoinBackend::Electrum(..))) => {
+                sync::Arc::from(sync::Mutex::from(setup_electrum(&config, &db)?))
+                    as sync::Arc<sync::Mutex<dyn BitcoinInterface>>
+            }
             _ => Err(StartupError::MissingBitcoinBackendConfig)?,
         };
 
