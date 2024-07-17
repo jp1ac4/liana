@@ -7,8 +7,13 @@ pub mod electrum;
 pub mod poller;
 
 use crate::{
-    bitcoin::d::{BitcoindError, CachedTxGetter, LSBlockEntry},
+    bitcoin::{
+        d::{BitcoindError, CachedTxGetter, LSBlockEntry},
+        electrum::sync_through_bdk,
+    },
+    database::{BlockInfo, Coin, DatabaseConnection},
     descriptors,
+    poller::looper::UpdatedCoins,
 };
 use bdk_electrum::{
     bdk_chain::local_chain::CheckPoint,
@@ -18,9 +23,9 @@ pub use d::{MempoolEntry, SyncProgress};
 
 use std::{collections::BTreeMap, convert::TryInto, fmt, sync};
 
-use miniscript::bitcoin::{self, address};
+use miniscript::bitcoin::{self, address, secp256k1};
 
-const COINBASE_MATURITY: i32 = 100;
+pub const COINBASE_MATURITY: i32 = 100;
 
 /// Information about a block
 #[derive(Debug, Clone, Eq, PartialEq, Copy)]
@@ -66,36 +71,49 @@ pub trait BitcoinInterface: Send {
     /// Check whether this former tip is part of the current best chain.
     fn is_in_chain(&self, tip: &BlockChainTip) -> bool;
 
-    /// Get coins received since the specified tip.
-    fn received_coins(
+    fn update_coins(
         &self,
-        tip: &BlockChainTip,
+        db_conn: &mut Box<dyn DatabaseConnection>,
+        previous_tip: &BlockChainTip,
         descs: &[descriptors::SinglePathLianaDesc],
-    ) -> Vec<UTxO>;
+        secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
+    ) -> UpdatedCoins;
 
-    /// Get all coins that were confirmed, and at what height and time. Along with "expired"
-    /// unconfirmed coins (for instance whose creating transaction may have been replaced).
-    fn confirmed_coins(
-        &self,
-        outpoints: &[bitcoin::OutPoint],
-    ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>);
-
-    /// Get all coins that are being spent, and the spending txid.
-    fn spending_coins(
-        &self,
-        outpoints: &[bitcoin::OutPoint],
-    ) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)>;
-
-    /// Get all coins that are spent with the final spend tx txid and blocktime. Along with the
-    /// coins for which the spending transaction "expired" (a conflicting transaction was mined and
-    /// it wasn't spending this coin).
-    fn spent_coins(
-        &self,
-        outpoints: &[(bitcoin::OutPoint, bitcoin::Txid)],
-    ) -> (
-        Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
-        Vec<bitcoin::OutPoint>,
+    fn sync(
+        &mut self,
+        //db_conn: &mut Box<dyn DatabaseConnection>,
     );
+
+    /// Get coins received since the specified tip.
+    // fn received_coins(
+    //     &self,
+    //     tip: &BlockChainTip,
+    //     descs: &[descriptors::SinglePathLianaDesc],
+    // ) -> Vec<UTxO>;
+
+    // /// Get all coins that were confirmed, and at what height and time. Along with "expired"
+    // /// unconfirmed coins (for instance whose creating transaction may have been replaced).
+    // fn confirmed_coins(
+    //     &self,
+    //     outpoints: &[bitcoin::OutPoint],
+    // ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>);
+
+    // /// Get all coins that are being spent, and the spending txid.
+    // fn spending_coins(
+    //     &self,
+    //     outpoints: &[bitcoin::OutPoint],
+    // ) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)>;
+
+    // /// Get all coins that are spent with the final spend tx txid and blocktime. Along with the
+    // /// coins for which the spending transaction "expired" (a conflicting transaction was mined and
+    // /// it wasn't spending this coin).
+    // fn spent_coins(
+    //     &self,
+    //     outpoints: &[(bitcoin::OutPoint, bitcoin::Txid)],
+    // ) -> (
+    //     Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
+    //     Vec<bitcoin::OutPoint>,
+    // );
 
     /// Get the common ancestor between the Bitcoin backend's tip and the given tip.
     fn common_ancestor(&self, tip: &BlockChainTip) -> Option<BlockChainTip>;
@@ -134,6 +152,146 @@ pub trait BitcoinInterface: Send {
 }
 
 impl BitcoinInterface for d::BitcoinD {
+    fn sync(
+        &mut self,
+        //db_conn: &mut Box<dyn DatabaseConnection>,
+    ) {
+    }
+
+    fn update_coins(
+        &self,
+        db_conn: &mut Box<dyn DatabaseConnection>,
+        previous_tip: &BlockChainTip,
+        descs: &[descriptors::SinglePathLianaDesc],
+        secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
+    ) -> UpdatedCoins {
+        let network = db_conn.network();
+        let curr_coins = db_conn.coins(&[], &[]);
+        log::debug!("Current coins: {:?}", curr_coins);
+
+        // Start by fetching newly received coins.
+        let mut received = Vec::new();
+        for utxo in self.received_coins(previous_tip, descs) {
+            let UTxO {
+                outpoint,
+                amount,
+                address,
+                is_immature,
+                ..
+            } = utxo;
+            // We can only really treat them if we know the derivation index that was used.
+            let address = match address.require_network(network) {
+                Ok(addr) => addr,
+                Err(e) => {
+                    log::error!("Invalid network for address: {}", e);
+                    continue;
+                }
+            };
+            if let Some((derivation_index, is_change)) =
+                db_conn.derivation_index_by_address(&address)
+            {
+                // First of if we are receiving coins that are beyond our next derivation index,
+                // adjust it.
+                if derivation_index > db_conn.receive_index() {
+                    db_conn.set_receive_index(derivation_index, secp);
+                }
+                if derivation_index > db_conn.change_index() {
+                    db_conn.set_change_index(derivation_index, secp);
+                }
+
+                // Now record this coin as a newly received one.
+                if !curr_coins.contains_key(&utxo.outpoint) {
+                    let coin = Coin {
+                        outpoint,
+                        is_immature,
+                        amount,
+                        derivation_index,
+                        is_change,
+                        block_info: None,
+                        spend_txid: None,
+                        spend_block: None,
+                    };
+                    received.push(coin);
+                }
+            } else {
+                // TODO: maybe we could try out something here? Like bruteforcing the next 200 indexes?
+                log::error!(
+                    "Could not get derivation index for coin '{}' (address: '{}')",
+                    &utxo.outpoint,
+                    &address
+                );
+            }
+        }
+        log::debug!("Newly received coins: {:?}", received);
+
+        // We need to take the newly received ones into account as well, as they may have been
+        // confirmed within the previous tip and the current one, and we may not poll this chunk of the
+        // chain anymore.
+        let to_be_confirmed: Vec<bitcoin::OutPoint> = curr_coins
+            .values()
+            .chain(received.iter())
+            .filter_map(|coin| {
+                if coin.block_info.is_none() {
+                    Some(coin.outpoint)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let (confirmed, expired) = self.confirmed_coins(&to_be_confirmed);
+        log::debug!("Newly confirmed coins: {:?}", confirmed);
+        log::debug!("Expired coins: {:?}", expired);
+
+        // We need to take the newly received ones into account as well, as they may have been
+        // spent within the previous tip and the current one, and we may not poll this chunk of the
+        // chain anymore.
+        // NOTE: curr_coins contain the "spending" coins. So this takes care of updating the spend_txid
+        // if a coin's spending transaction gets RBF'd.
+        let expired_set: HashSet<_> = expired.iter().collect();
+        let to_be_spent: Vec<bitcoin::OutPoint> = curr_coins
+            .values()
+            .chain(received.iter())
+            .filter_map(|coin| {
+                // Always check for spends when the spend tx is not confirmed as it might get RBF'd.
+                if (coin.spend_txid.is_some() && coin.spend_block.is_some())
+                    || expired_set.contains(&coin.outpoint)
+                {
+                    None
+                } else {
+                    Some(coin.outpoint)
+                }
+            })
+            .collect();
+        let spending = self.spending_coins(&to_be_spent);
+        log::debug!("Newly spending coins: {:?}", spending);
+
+        // Mark coins in a spending state whose Spend transaction was confirmed as such. Note we
+        // need to take into account the freshly marked as spending coins as well, as their spend
+        // may have been confirmed within the previous tip and the current one, and we may not poll
+        // this chunk of the chain anymore.
+        let spending_coins: Vec<(bitcoin::OutPoint, bitcoin::Txid)> = db_conn
+            .list_spending_coins()
+            .values()
+            .map(|coin| (coin.outpoint, coin.spend_txid.expect("Coin is spending")))
+            .chain(spending.iter().cloned())
+            .collect();
+        let (spent, expired_spending) = self.spent_coins(spending_coins.as_slice());
+        let spent = spent
+            .into_iter()
+            .map(|(oupoint, txid, block)| (oupoint, txid, block.height, block.time))
+            .collect();
+        log::debug!("Newly spent coins: {:?}", spent);
+
+        UpdatedCoins {
+            received,
+            confirmed,
+            expired,
+            spending,
+            expired_spending,
+            spent,
+        }
+    }
+
     fn genesis_block_timestamp(&self) -> u32 {
         self.get_block_stats(
             self.get_block_hash(0)
@@ -163,168 +321,6 @@ impl BitcoinInterface for d::BitcoinD {
         self.get_block_hash(tip.height)
             .map(|bh| bh == tip.hash)
             .unwrap_or(false)
-    }
-
-    fn received_coins(
-        &self,
-        tip: &BlockChainTip,
-        descs: &[descriptors::SinglePathLianaDesc],
-    ) -> Vec<UTxO> {
-        let lsb_res = self.list_since_block(&tip.hash);
-
-        lsb_res
-            .received_coins
-            .into_iter()
-            .filter_map(|entry| {
-                let LSBlockEntry {
-                    outpoint,
-                    amount,
-                    block_height,
-                    address,
-                    parent_descs,
-                    is_immature,
-                } = entry;
-                if parent_descs
-                    .iter()
-                    .any(|parent_desc| descs.iter().any(|desc| desc == parent_desc))
-                {
-                    Some(UTxO {
-                        outpoint,
-                        amount,
-                        block_height,
-                        address,
-                        is_immature,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    fn confirmed_coins(
-        &self,
-        outpoints: &[bitcoin::OutPoint],
-    ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
-        // The confirmed and expired coins to be returned.
-        let mut confirmed = Vec::with_capacity(outpoints.len());
-        let mut expired = Vec::new();
-        // Cached calls to `gettransaction`.
-        let mut tx_getter = CachedTxGetter::new(self);
-
-        for op in outpoints {
-            let res = if let Some(res) = tx_getter.get_transaction(&op.txid) {
-                res
-            } else {
-                log::error!("Transaction not in wallet for coin '{}'.", op);
-                continue;
-            };
-
-            // If the transaction was confirmed, mark the coin as such.
-            if let Some(block) = res.block {
-                // Do not mark immature coinbase deposits as confirmed until they become mature.
-                if res.is_coinbase && res.confirmations < COINBASE_MATURITY {
-                    log::debug!("Coin at '{}' comes from an immature coinbase transaction with {} confirmations. Not marking it as confirmed for now.", op, res.confirmations);
-                    continue;
-                }
-                confirmed.push((*op, block.height, block.time));
-                continue;
-            }
-
-            // If the transaction was dropped from the mempool, discard the coin.
-            if !self.is_in_mempool(&op.txid) {
-                expired.push(*op);
-            }
-        }
-
-        (confirmed, expired)
-    }
-
-    fn spending_coins(
-        &self,
-        outpoints: &[bitcoin::OutPoint],
-    ) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)> {
-        let mut spent = Vec::with_capacity(outpoints.len());
-
-        for op in outpoints {
-            if self.is_spent(op) {
-                let spending_txid = if let Some(txid) = self.get_spender_txid(op) {
-                    txid
-                } else {
-                    // TODO: better handling of this edge case.
-                    log::error!(
-                        "Could not get spender of '{}'. Not reporting it as spending.",
-                        op
-                    );
-                    continue;
-                };
-
-                spent.push((*op, spending_txid));
-            }
-        }
-
-        spent
-    }
-
-    fn spent_coins(
-        &self,
-        outpoints: &[(bitcoin::OutPoint, bitcoin::Txid)],
-    ) -> (
-        Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
-        Vec<bitcoin::OutPoint>,
-    ) {
-        // Spend coins to be returned.
-        let mut spent = Vec::with_capacity(outpoints.len());
-        // Coins whose spending transaction isn't in our local mempool anymore.
-        let mut expired = Vec::new();
-        // Cached calls to `gettransaction`.
-        let mut tx_getter = CachedTxGetter::new(self);
-
-        for (op, txid) in outpoints {
-            let res = if let Some(res) = tx_getter.get_transaction(txid) {
-                res
-            } else {
-                log::error!("Could not get tx {} spending coin {}.", txid, op);
-                continue;
-            };
-
-            // If the transaction was confirmed, mark it as such.
-            if let Some(block) = res.block {
-                spent.push((*op, *txid, block));
-                continue;
-            }
-
-            // If a conflicting transaction was confirmed instead, replace the txid of the
-            // spender for this coin with it and mark it as confirmed.
-            let conflict = res.conflicting_txs.iter().find_map(|txid| {
-                tx_getter.get_transaction(txid).and_then(|tx| {
-                    tx.block.and_then(|block| {
-                        // Being part of our watchonly wallet isn't enough, as it could be a
-                        // conflicting transaction which spends a different set of coins. Make sure
-                        // it does actually spend this coin.
-                        tx.tx.input.iter().find_map(|txin| {
-                            if &txin.previous_output == op {
-                                Some((*txid, block))
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                })
-            });
-            if let Some((txid, block)) = conflict {
-                spent.push((*op, txid, block));
-                continue;
-            }
-
-            // If the transaction was not confirmed, a conflicting transaction spending this coin
-            // too wasn't mined, but still isn't in our mempool anymore, mark the spend as expired.
-            if !self.is_in_mempool(txid) {
-                expired.push(*op);
-            }
-        }
-
-        (spent, expired)
     }
 
     fn common_ancestor(&self, tip: &BlockChainTip) -> Option<BlockChainTip> {
@@ -426,37 +422,56 @@ impl BitcoinInterface for sync::Arc<sync::Mutex<dyn BitcoinInterface + 'static>>
         self.lock().unwrap().is_in_chain(tip)
     }
 
-    fn received_coins(
-        &self,
-        tip: &BlockChainTip,
-        descs: &[descriptors::SinglePathLianaDesc],
-    ) -> Vec<UTxO> {
-        self.lock().unwrap().received_coins(tip, descs)
-    }
-
-    fn confirmed_coins(
-        &self,
-        outpoints: &[bitcoin::OutPoint],
-    ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
-        self.lock().unwrap().confirmed_coins(outpoints)
-    }
-
-    fn spending_coins(
-        &self,
-        outpoints: &[bitcoin::OutPoint],
-    ) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)> {
-        self.lock().unwrap().spending_coins(outpoints)
-    }
-
-    fn spent_coins(
-        &self,
-        outpoints: &[(bitcoin::OutPoint, bitcoin::Txid)],
-    ) -> (
-        Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
-        Vec<bitcoin::OutPoint>,
+    fn sync(
+        &mut self,
+        //db_conn: &mut Box<dyn DatabaseConnection>,
     ) {
-        self.lock().unwrap().spent_coins(outpoints)
+        self.lock().unwrap().sync()
     }
+
+    fn update_coins(
+        &self,
+        db_conn: &mut Box<dyn DatabaseConnection>,
+        previous_tip: &BlockChainTip,
+        descs: &[descriptors::SinglePathLianaDesc],
+        secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
+    ) -> UpdatedCoins {
+        self.lock()
+            .unwrap()
+            .update_coins(db_conn, previous_tip, descs, secp)
+    }
+
+    // fn received_coins(
+    //     &self,
+    //     tip: &BlockChainTip,
+    //     descs: &[descriptors::SinglePathLianaDesc],
+    // ) -> Vec<UTxO> {
+    //     self.lock().unwrap().received_coins(tip, descs)
+    // }
+
+    // fn confirmed_coins(
+    //     &self,
+    //     outpoints: &[bitcoin::OutPoint],
+    // ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
+    //     self.lock().unwrap().confirmed_coins(outpoints)
+    // }
+
+    // fn spending_coins(
+    //     &self,
+    //     outpoints: &[bitcoin::OutPoint],
+    // ) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)> {
+    //     self.lock().unwrap().spending_coins(outpoints)
+    // }
+
+    // fn spent_coins(
+    //     &self,
+    //     outpoints: &[(bitcoin::OutPoint, bitcoin::Txid)],
+    // ) -> (
+    //     Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
+    //     Vec<bitcoin::OutPoint>,
+    // ) {
+    //     self.lock().unwrap().spent_coins(outpoints)
+    // }
 
     fn common_ancestor(&self, tip: &BlockChainTip) -> Option<BlockChainTip> {
         self.lock().unwrap().common_ancestor(tip)

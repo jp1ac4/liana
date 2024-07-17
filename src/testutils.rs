@@ -68,34 +68,44 @@ impl BitcoinInterface for DummyBitcoind {
         true
     }
 
-    fn received_coins(
+    fn update_coins(
         &self,
-        _: &BlockChainTip,
-        _: &[descriptors::SinglePathLianaDesc],
-    ) -> Vec<UTxO> {
-        Vec::new()
+        db_conn: &mut Box<dyn DatabaseConnection>,
+        previous_tip: &BlockChainTip,
+        descs: &[descriptors::SinglePathLianaDesc],
+        secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
+    ) -> crate::bitcoin::poller::looper::UpdatedCoins {
+        todo!()
     }
 
-    fn confirmed_coins(
-        &self,
-        _: &[bitcoin::OutPoint],
-    ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
-        (Vec::new(), Vec::new())
-    }
+    // fn received_coins(
+    //     &self,
+    //     _: &BlockChainTip,
+    //     _: &[descriptors::SinglePathLianaDesc],
+    // ) -> Vec<UTxO> {
+    //     Vec::new()
+    // }
 
-    fn spending_coins(&self, _: &[bitcoin::OutPoint]) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)> {
-        Vec::new()
-    }
+    // fn confirmed_coins(
+    //     &self,
+    //     _: &[bitcoin::OutPoint],
+    // ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
+    //     (Vec::new(), Vec::new())
+    // }
 
-    fn spent_coins(
-        &self,
-        _: &[(bitcoin::OutPoint, bitcoin::Txid)],
-    ) -> (
-        Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
-        Vec<bitcoin::OutPoint>,
-    ) {
-        (Vec::new(), Vec::new())
-    }
+    // fn spending_coins(&self, _: &[bitcoin::OutPoint]) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)> {
+    //     Vec::new()
+    // }
+
+    // fn spent_coins(
+    //     &self,
+    //     _: &[(bitcoin::OutPoint, bitcoin::Txid)],
+    // ) -> (
+    //     Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
+    //     Vec<bitcoin::OutPoint>,
+    // ) {
+    //     (Vec::new(), Vec::new())
+    // }
 
     fn common_ancestor(&self, _: &BlockChainTip) -> Option<BlockChainTip> {
         todo!()

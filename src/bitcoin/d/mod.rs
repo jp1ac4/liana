@@ -4,9 +4,9 @@
 
 mod utils;
 use crate::{
-    bitcoin::{Block, BlockChainTip},
+    bitcoin::{Block, BlockChainTip, UTxO, COINBASE_MATURITY},
     config,
-    descriptors::LianaDescriptor,
+    descriptors::{self, LianaDescriptor},
 };
 use utils::{block_before_date, roundup_progress};
 
@@ -1233,6 +1233,168 @@ impl BitcoinD {
     /// Stop bitcoind.
     pub fn stop(&self) {
         self.make_node_request("stop", None);
+    }
+
+    pub fn received_coins(
+        &self,
+        tip: &BlockChainTip,
+        descs: &[descriptors::SinglePathLianaDesc],
+    ) -> Vec<UTxO> {
+        let lsb_res = self.list_since_block(&tip.hash);
+
+        lsb_res
+            .received_coins
+            .into_iter()
+            .filter_map(|entry| {
+                let LSBlockEntry {
+                    outpoint,
+                    amount,
+                    block_height,
+                    address,
+                    parent_descs,
+                    is_immature,
+                } = entry;
+                if parent_descs
+                    .iter()
+                    .any(|parent_desc| descs.iter().any(|desc| desc == parent_desc))
+                {
+                    Some(UTxO {
+                        outpoint,
+                        amount,
+                        block_height,
+                        address,
+                        is_immature,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn confirmed_coins(
+        &self,
+        outpoints: &[bitcoin::OutPoint],
+    ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
+        // The confirmed and expired coins to be returned.
+        let mut confirmed = Vec::with_capacity(outpoints.len());
+        let mut expired = Vec::new();
+        // Cached calls to `gettransaction`.
+        let mut tx_getter = CachedTxGetter::new(self);
+
+        for op in outpoints {
+            let res = if let Some(res) = tx_getter.get_transaction(&op.txid) {
+                res
+            } else {
+                log::error!("Transaction not in wallet for coin '{}'.", op);
+                continue;
+            };
+
+            // If the transaction was confirmed, mark the coin as such.
+            if let Some(block) = res.block {
+                // Do not mark immature coinbase deposits as confirmed until they become mature.
+                if res.is_coinbase && res.confirmations < COINBASE_MATURITY {
+                    log::debug!("Coin at '{}' comes from an immature coinbase transaction with {} confirmations. Not marking it as confirmed for now.", op, res.confirmations);
+                    continue;
+                }
+                confirmed.push((*op, block.height, block.time));
+                continue;
+            }
+
+            // If the transaction was dropped from the mempool, discard the coin.
+            if !self.is_in_mempool(&op.txid) {
+                expired.push(*op);
+            }
+        }
+
+        (confirmed, expired)
+    }
+
+    pub fn spending_coins(
+        &self,
+        outpoints: &[bitcoin::OutPoint],
+    ) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)> {
+        let mut spent = Vec::with_capacity(outpoints.len());
+
+        for op in outpoints {
+            if self.is_spent(op) {
+                let spending_txid = if let Some(txid) = self.get_spender_txid(op) {
+                    txid
+                } else {
+                    // TODO: better handling of this edge case.
+                    log::error!(
+                        "Could not get spender of '{}'. Not reporting it as spending.",
+                        op
+                    );
+                    continue;
+                };
+
+                spent.push((*op, spending_txid));
+            }
+        }
+
+        spent
+    }
+
+    pub fn spent_coins(
+        &self,
+        outpoints: &[(bitcoin::OutPoint, bitcoin::Txid)],
+    ) -> (
+        Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
+        Vec<bitcoin::OutPoint>,
+    ) {
+        // Spend coins to be returned.
+        let mut spent = Vec::with_capacity(outpoints.len());
+        // Coins whose spending transaction isn't in our local mempool anymore.
+        let mut expired = Vec::new();
+        // Cached calls to `gettransaction`.
+        let mut tx_getter = CachedTxGetter::new(self);
+
+        for (op, txid) in outpoints {
+            let res = if let Some(res) = tx_getter.get_transaction(txid) {
+                res
+            } else {
+                log::error!("Could not get tx {} spending coin {}.", txid, op);
+                continue;
+            };
+
+            // If the transaction was confirmed, mark it as such.
+            if let Some(block) = res.block {
+                spent.push((*op, *txid, block));
+                continue;
+            }
+
+            // If a conflicting transaction was confirmed instead, replace the txid of the
+            // spender for this coin with it and mark it as confirmed.
+            let conflict = res.conflicting_txs.iter().find_map(|txid| {
+                tx_getter.get_transaction(txid).and_then(|tx| {
+                    tx.block.and_then(|block| {
+                        // Being part of our watchonly wallet isn't enough, as it could be a
+                        // conflicting transaction which spends a different set of coins. Make sure
+                        // it does actually spend this coin.
+                        tx.tx.input.iter().find_map(|txin| {
+                            if &txin.previous_output == op {
+                                Some((*txid, block))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                })
+            });
+            if let Some((txid, block)) = conflict {
+                spent.push((*op, txid, block));
+                continue;
+            }
+
+            // If the transaction was not confirmed, a conflicting transaction spending this coin
+            // too wasn't mined, but still isn't in our mempool anymore, mark the spend as expired.
+            if !self.is_in_mempool(txid) {
+                expired.push(*op);
+            }
+        }
+
+        (spent, expired)
     }
 }
 
