@@ -244,7 +244,7 @@ fn updates(
 
     // Then check the state of our coins. Do it even if the tip did not change since last poll, as
     // we may have unconfirmed transactions.
-    bit.sync();
+    bit.sync(db_conn);
     let updated_coins = bit.update_coins(db_conn, &current_tip, descs, secp);
 
     // If the tip changed while we were polling our Bitcoin interface, start over.
