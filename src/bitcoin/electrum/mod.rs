@@ -20,7 +20,7 @@ use bdk_electrum::{
             BlockHash, Network, ScriptBuf, TxOut,
         },
         keychain::KeychainTxOutIndex,
-        local_chain::{CheckPoint, LocalChain},
+        local_chain::{self, CheckPoint, LocalChain},
         miniscript::{Descriptor, DescriptorPublicKey},
         spk_client::SyncRequest,
         tx_graph::{self, TxGraph},
@@ -157,7 +157,10 @@ fn local_chain_from_db(
     let _ = local_chain.insert_block(prev_tip.block_id());
     println!("local_chain_from_db: iterating checkpoints");
     for cp in local_chain.iter_checkpoints() {
-        println!("local_chain_from_db: checkpoint block: {}", cp.block_id().height);
+        println!(
+            "local_chain_from_db: checkpoint block: {}",
+            cp.block_id().height
+        );
     }
     local_chain
 }
@@ -280,9 +283,9 @@ fn local_chain_from_db(
 
 fn list_transactions(db_conn: &mut Box<dyn DatabaseConnection>) -> Vec<Transaction> {
     let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32;
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
     let txids = db_conn.list_txids(u32::MIN, now, 1000);
     db_conn
         .list_wallet_transactions(&txids)
@@ -438,7 +441,6 @@ pub fn bdk_wallet_from_db(
 
     //let (next_height, reorg_height) = wallet_heights(db_conn, bit);
     let local_chain = local_chain_from_db(db_conn, client);
-
     let mut bdk_wallet = BdkWallet {
         graph: {
             let mut indexer = KeychainTxOutIndex::<KeychainType>::new(ADDRESS_LOOK_AHEAD);
@@ -473,6 +475,7 @@ pub fn bdk_wallet_from_db(
 
     // Update the existing coins and transactions information using a TxGraph changeset.
     let mut graph_cs = tx_graph::ChangeSet::default();
+    let mut chain_cs = local_chain::ChangeSet::default();
     for tx in existing_txs {
         graph_cs.txs.insert(Arc::new(tx.tx));
     }
@@ -495,16 +498,22 @@ pub fn bdk_wallet_from_db(
         // the table.
         if let Some(block_info) = coin.block_info {
             graph_cs.anchors.insert((block_info, coin.outpoint.txid));
+            chain_cs.insert(block_info.height.try_into().unwrap(), Some(block_info.hash));
         }
         // If the coin's spending transaction is confirmed, do the same.
         if let Some(spend_block_info) = coin.spend_block {
             let spend_txid = coin.spend_txid.expect("Must be present if confirmed.");
             graph_cs.anchors.insert((spend_block_info, spend_txid));
+            chain_cs.insert(
+                spend_block_info.height.try_into().unwrap(),
+                Some(spend_block_info.hash),
+            );
         }
     }
     let mut graph = TxGraph::default();
     graph.apply_changeset(graph_cs);
     let _ = bdk_wallet.graph.apply_update(graph);
+    let _ = bdk_wallet.local_chain.apply_changeset(&chain_cs);
     //bdk_wallet.local_chain
     println!("finished setting up BDK wallet from DB");
     Ok(bdk_wallet)
@@ -515,10 +524,103 @@ pub fn sync_through_bdk(
     bdk_wallet: &mut BdkWallet,
     client: &ElectrumClient,
 ) {
+    let network = bdk_wallet.network;
     let chain_tip = bdk_wallet.local_chain.tip();
-    println!("sync_through_bdk: local chain tip: {}", chain_tip.block_id().height);
-    let request =
+    println!(
+        "sync_through_bdk: local chain tip: {}",
+        chain_tip.block_id().height
+    );
+    //let spks = bdk_wallet.graph.index.all_unbounded_spk_iters();
+    let mut request =
         SyncRequest::from_chain_tip(chain_tip.clone()).cache_graph_txs(bdk_wallet.graph.graph());
+
+    let all_spks = bdk_wallet
+        .graph
+        .index
+        .revealed_spks(..)
+        .map(|(k, i, spk)| (k.to_owned(), i, spk.to_owned()))
+        .collect::<Vec<_>>();
+    request = request.chain_spks(all_spks.into_iter().map(|(k, spk_i, spk)| {
+        eprint!("Scanning {:?}: {}", k, spk_i);
+        spk
+    }));
+    // let unused_spks = bdk_wallet
+    //     .graph
+    //     .index
+    //     .unused_spks()
+    //     .map(|(k, i, spk)| (k, i, spk.to_owned()))
+    //     .collect::<Vec<_>>();
+    // request = request.chain_spks(unused_spks.into_iter().map(move |(k, spk_i, spk)| {
+    //     eprint!(
+    //         "Checking if address {} {}:{} has been used",
+    //         bitcoin::Address::from_script(&spk, network).unwrap(),
+    //         k,
+    //         spk_i,
+    //     );
+    //     spk
+    // }));
+
+    // let init_outpoints = bdk_wallet.graph.index.outpoints();
+
+    // let utxos = bdk_wallet
+    //     .graph
+    //     .graph()
+    //     .filter_chain_unspents(
+    //         &bdk_wallet.local_chain,
+    //         chain_tip.block_id(),
+    //         init_outpoints,
+    //     )
+    //     .map(|(_, utxo)| utxo)
+    //     .collect::<Vec<_>>();
+    // request = request.chain_outpoints(utxos.into_iter().map(|utxo| {
+    //     eprint!(
+    //         "Checking if outpoint {} (value: {}) has been spent",
+    //         utxo.outpoint, utxo.txout.value
+    //     );
+    //     utxo.outpoint
+    // }));
+
+    // let unconfirmed_txids = bdk_wallet
+    //     .graph
+    //     .graph()
+    //     .list_chain_txs(&bdk_wallet.local_chain, chain_tip.block_id())
+    //     .filter(|canonical_tx| !canonical_tx.chain_position.is_confirmed())
+    //     .map(|canonical_tx| canonical_tx.tx_node.txid)
+    //     .collect::<Vec<bitcoin::Txid>>();
+
+    // request = request.chain_txids(
+    //     unconfirmed_txids
+    //         .into_iter()
+    //         .inspect(|txid| eprint!("Checking if {} is confirmed yet", txid)),
+    // );
+
+    let total_spks = request.spks.len();
+    println!("total_spks: {total_spks}");
+    // let total_txids = request.txids.len();
+    // let total_ops = request.outpoints.len();
+    request = request
+        .inspect_spks({
+            let mut visited = 0;
+            move |_| {
+                visited += 1;
+                eprintln!("inspect_spks [ {:>6.2}% ]", (visited * 100) as f32 / total_spks as f32)
+            }
+        })
+        // .inspect_txids({
+        //     let mut visited = 0;
+        //     move |_| {
+        //         visited += 1;
+        //         eprintln!("inspect_txids [ {:>6.2}% ]", (visited * 100) as f32 / total_txids as f32)
+        //     }
+        // })
+        // .inspect_outpoints({
+        //     let mut visited = 0;
+        //     move |_| {
+        //         visited += 1;
+        //         eprintln!("inspect_outpoints [ {:>6.2}% ]", (visited * 100) as f32 / total_ops as f32)
+        //     }
+        // })
+        ;
 
     //let sync_result = client.sync(request, 10, true).unwrap().with_confirmation_height_anchor();
     let sync_result = client
@@ -526,7 +628,10 @@ pub fn sync_through_bdk(
         .unwrap()
         .with_confirmation_time_height_anchor(client)
         .unwrap();
-    println!("sync_through_bdk: chain_update: {}", sync_result.chain_update.height());
+    println!(
+        "sync_through_bdk: chain_update: {}",
+        sync_result.chain_update.height()
+    );
     //let mut local_chain = bdk_wallet.local_chain;
     let _ = bdk_wallet
         .local_chain
@@ -615,7 +720,10 @@ pub fn coins_from_wallet(
         //     updated_coins.push(coin);
         // }
     }
-    println!("coins from wallet: wallet coins length: {}", wallet_coins.len());
+    println!(
+        "coins from wallet: wallet coins length: {}",
+        wallet_coins.len()
+    );
     wallet_coins
     // Drop any coins that are not unbroadcast and do not appear in the wallet coins.
     // let dropped_coins: Vec<_> = existing_coins
