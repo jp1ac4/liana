@@ -68,11 +68,7 @@ impl BitcoinInterface for DummyBitcoind {
         true
     }
 
-    fn sync(
-        &mut self,
-        //db_conn: &mut Box<dyn DatabaseConnection>,
-    ) {
-    }
+    fn sync(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {}
 
     fn update_coins(
         &self,
