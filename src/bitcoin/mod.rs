@@ -15,6 +15,7 @@ use crate::{
     descriptors,
     poller::looper::UpdatedCoins,
 };
+use bdk_chain::bitcoin::bip32::ChildNumber;
 use bdk_electrum::{
     bdk_chain::local_chain::CheckPoint,
     electrum_client::{ElectrumApi, Error, HeaderNotification},
@@ -524,11 +525,35 @@ pub struct UTxO {
 }
 
 impl BitcoinInterface for electrum::Electrum {
-    fn sync(
-        &mut self,
-        //db_conn: &mut Box<dyn DatabaseConnection>,
-    ) {
+    fn sync(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {
+        // let last_max_db_index = match db_conn.receive_index().max(db_conn.change_index()) {
+        //     ChildNumber::Normal { index } => index,
+        //     ChildNumber::Hardened { index } => index,
+        // }.saturating_sub(1); // we store the next index
+
+        let mut last_active_indices = BTreeMap::new();
+        // Note we store in DB the next derivation to be used for each, hence the -1 here.
+        let deposit_index: u32 = db_conn.receive_index().into();
+        println!("next deposit index {deposit_index}");
+        last_active_indices.insert(
+            electrum::KeychainType::Deposit,
+            deposit_index.saturating_sub(1),
+        );
+        let change_index: u32 = db_conn.change_index().into();
+        println!("next change index {change_index}");
+        last_active_indices.insert(
+            electrum::KeychainType::Change,
+            change_index.saturating_sub(1),
+        );
+
+        let _ = self
+            .bdk_wallet
+            .graph
+            .index
+            .reveal_to_target_multi(&last_active_indices);
+
         self.bdk_wallet.existing_coins = self.bdk_wallet.wallet_coins.clone();
+
         sync_through_bdk(&mut self.bdk_wallet, &self.client);
         self.bdk_wallet.wallet_coins = coins_from_wallet(&self.bdk_wallet)
             .into_iter()
