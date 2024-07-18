@@ -84,10 +84,7 @@ pub trait BitcoinInterface: Send {
         secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) -> UpdatedCoins;
 
-    fn sync(
-        &mut self,
-        //db_conn: &mut Box<dyn DatabaseConnection>,
-    );
+    fn sync(&mut self, db_conn: &mut Box<dyn DatabaseConnection>);
 
     /// Get coins received since the specified tip.
     // fn received_coins(
@@ -157,11 +154,7 @@ pub trait BitcoinInterface: Send {
 }
 
 impl BitcoinInterface for d::BitcoinD {
-    fn sync(
-        &mut self,
-        //db_conn: &mut Box<dyn DatabaseConnection>,
-    ) {
-    }
+    fn sync(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {}
 
     fn update_coins(
         &self,
@@ -427,11 +420,8 @@ impl BitcoinInterface for sync::Arc<sync::Mutex<dyn BitcoinInterface + 'static>>
         self.lock().unwrap().is_in_chain(tip)
     }
 
-    fn sync(
-        &mut self,
-        //db_conn: &mut Box<dyn DatabaseConnection>,
-    ) {
-        self.lock().unwrap().sync()
+    fn sync(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {
+        self.lock().unwrap().sync(db_conn)
     }
 
     fn update_coins(
