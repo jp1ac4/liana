@@ -228,6 +228,7 @@ fn updates(
 ) {
     // Check if there was a new block before updating ourselves.
     let current_tip = db_conn.chain_tip().expect("Always set at first startup");
+    println!("updates: current tip is {}", current_tip.height);
     let latest_tip = match new_tip(bit, &current_tip) {
         TipUpdate::Same => current_tip,
         TipUpdate::Progress(new_tip) => new_tip,
@@ -239,6 +240,7 @@ fn updates(
             return updates(db_conn, bit, descs, secp);
         }
     };
+    println!("updates: latest tip is {}", latest_tip.height);
 
     // Then check the state of our coins. Do it even if the tip did not change since last poll, as
     // we may have unconfirmed transactions.

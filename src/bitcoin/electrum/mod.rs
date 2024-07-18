@@ -143,6 +143,7 @@ fn local_chain_from_db(
         .block_header(0)
         .expect("Genesis block hash must always be there")
         .block_hash();
+    println!("local_chain_from_db: genesis_hash: {genesis_hash}");
     let mut local_chain = LocalChain::from_genesis_hash(genesis_hash).0;
     let prev_tip = db_conn
         .chain_tip()
@@ -154,6 +155,10 @@ fn local_chain_from_db(
         })
         .expect("TODO");
     let _ = local_chain.insert_block(prev_tip.block_id());
+    println!("local_chain_from_db: iterating checkpoints");
+    for cp in local_chain.iter_checkpoints() {
+        println!("local_chain_from_db: checkpoint block: {}", cp.block_id().height);
+    }
     local_chain
 }
 
@@ -414,6 +419,7 @@ pub fn bdk_wallet_from_db(
     client: &impl ElectrumApi,
     descs: &[descriptors::SinglePathLianaDesc],
 ) -> Result<BdkWallet, Box<dyn std::error::Error>> {
+    println!("setting up BDK wallet from DB");
     let network = db_conn.network();
 
     let existing_coins = list_coins(db_conn, client);
@@ -499,6 +505,8 @@ pub fn bdk_wallet_from_db(
     let mut graph = TxGraph::default();
     graph.apply_changeset(graph_cs);
     let _ = bdk_wallet.graph.apply_update(graph);
+    //bdk_wallet.local_chain
+    println!("finished setting up BDK wallet from DB");
     Ok(bdk_wallet)
 }
 
@@ -508,6 +516,7 @@ pub fn sync_through_bdk(
     client: &ElectrumClient,
 ) {
     let chain_tip = bdk_wallet.local_chain.tip();
+    println!("sync_through_bdk: local chain tip: {}", chain_tip.block_id().height);
     let request =
         SyncRequest::from_chain_tip(chain_tip.clone()).cache_graph_txs(bdk_wallet.graph.graph());
 
@@ -517,7 +526,7 @@ pub fn sync_through_bdk(
         .unwrap()
         .with_confirmation_time_height_anchor(client)
         .unwrap();
-
+    println!("sync_through_bdk: chain_update: {}", sync_result.chain_update.height());
     //let mut local_chain = bdk_wallet.local_chain;
     let _ = bdk_wallet
         .local_chain
@@ -606,6 +615,7 @@ pub fn coins_from_wallet(
         //     updated_coins.push(coin);
         // }
     }
+    println!("coins from wallet: wallet coins length: {}", wallet_coins.len());
     wallet_coins
     // Drop any coins that are not unbroadcast and do not appear in the wallet coins.
     // let dropped_coins: Vec<_> = existing_coins
