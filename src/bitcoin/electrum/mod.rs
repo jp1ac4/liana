@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, HashMap},
     convert::TryInto,
     str::FromStr,
     sync::Arc,
@@ -30,9 +30,7 @@ use bdk_electrum::{
     ElectrumExt,
 };
 
-use crate::{
-    bitcoin::COINBASE_MATURITY, database::DatabaseConnection, descriptors, BitcoinInterface,
-};
+use crate::{bitcoin::COINBASE_MATURITY, database::DatabaseConnection, descriptors};
 
 // The difference between the derivation index of the last seen used address and the last stored
 // address in the database addresses mapping.
@@ -91,6 +89,18 @@ pub struct BdkWallet {
     pub local_chain: LocalChain,
     pub existing_coins: HashMap<bitcoin::OutPoint, Coin>,
     pub wallet_coins: HashMap<bitcoin::OutPoint, Coin>,
+}
+
+impl BdkWallet {
+    pub fn new(network: bitcoin::Network, genesis_hash: bitcoin::BlockHash) -> Self {
+        BdkWallet {
+            graph: IndexedTxGraph::default(),
+            network,
+            local_chain: LocalChain::from_genesis_hash(genesis_hash).0,
+            existing_coins: HashMap::new(),
+            wallet_coins: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -417,6 +427,8 @@ fn get_spk_from_wallet(
 }
 
 // Apply existing data from the database to the BDK wallet.
+// This assumes all block info in the DB is valid for the current tip so we
+// can use the block hashes fetched from client.
 pub fn bdk_wallet_from_db(
     db_conn: &mut Box<dyn DatabaseConnection>,
     client: &impl ElectrumApi,
@@ -514,7 +526,6 @@ pub fn bdk_wallet_from_db(
     graph.apply_changeset(graph_cs);
     let _ = bdk_wallet.graph.apply_update(graph);
     let _ = bdk_wallet.local_chain.apply_changeset(&chain_cs);
-    //bdk_wallet.local_chain
     println!("finished setting up BDK wallet from DB");
     Ok(bdk_wallet)
 }
@@ -524,12 +535,15 @@ pub fn sync_through_bdk(
     bdk_wallet: &mut BdkWallet,
     client: &ElectrumClient,
 ) {
-    let network = bdk_wallet.network;
+    //let network = bdk_wallet.network;
     let chain_tip = bdk_wallet.local_chain.tip();
     println!(
         "sync_through_bdk: local chain tip: {}",
         chain_tip.block_id().height
     );
+
+    //bdk_wallet.local_chain.disconnect_from(block_id)
+
     //let spks = bdk_wallet.graph.index.all_unbounded_spk_iters();
     let mut request =
         SyncRequest::from_chain_tip(chain_tip.clone()).cache_graph_txs(bdk_wallet.graph.graph());

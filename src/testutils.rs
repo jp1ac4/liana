@@ -1,5 +1,5 @@
 use crate::{
-    bitcoin::{BitcoinInterface, Block, BlockChainTip, MempoolEntry, SyncProgress, UTxO},
+    bitcoin::{BitcoinInterface, Block, BlockChainTip, MempoolEntry, SyncProgress},
     config::{BitcoinConfig, Config},
     database::{BlockInfo, Coin, CoinStatus, DatabaseConnection, DatabaseInterface, LabelItem},
     descriptors, DaemonControl, DaemonHandle,
@@ -68,14 +68,25 @@ impl BitcoinInterface for DummyBitcoind {
         true
     }
 
-    fn sync(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {}
+    fn sync(&mut self, _db_conn: &mut Box<dyn DatabaseConnection>) {
+        todo!()
+    }
+
+    fn init(
+        &mut self,
+        _db_conn: &mut Box<dyn DatabaseConnection>,
+        _descs: &[descriptors::SinglePathLianaDesc],
+        _latest_tip: BlockChainTip,
+    ) -> bool {
+        todo!()
+    }
 
     fn update_coins(
         &self,
-        db_conn: &mut Box<dyn DatabaseConnection>,
-        previous_tip: &BlockChainTip,
-        descs: &[descriptors::SinglePathLianaDesc],
-        secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
+        _db_conn: &mut Box<dyn DatabaseConnection>,
+        _previous_tip: &BlockChainTip,
+        _descs: &[descriptors::SinglePathLianaDesc],
+        _secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) -> crate::bitcoin::poller::looper::UpdatedCoins {
         todo!()
     }

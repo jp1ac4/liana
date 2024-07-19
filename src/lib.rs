@@ -13,9 +13,10 @@ pub mod spend;
 #[cfg(test)]
 mod testutils;
 
+use bdk_chain::bitcoin::{hashes::Hash, BlockHash};
 use bdk_electrum::electrum_client::ElectrumApi;
 pub use bip39;
-use bitcoin::electrum::{bdk_wallet_from_db, BdkWallet, Electrum};
+use bitcoin::electrum::{BdkWallet, Electrum};
 pub use miniscript;
 
 pub use crate::bitcoin::d::{BitcoinD, BitcoindError, WalletError};
@@ -26,7 +27,7 @@ use crate::{
     config::Config,
     database::{
         sqlite::{FreshDbOptions, SqliteDb, SqliteDbError},
-        DatabaseConnection, DatabaseInterface,
+        DatabaseInterface,
     },
 };
 
@@ -210,19 +211,29 @@ fn setup_sqlite(
     Ok(sqlite)
 }
 
-fn setup_electrum(config: &Config, db: &impl DatabaseInterface) -> Result<Electrum, StartupError> {
+fn setup_electrum(config: &Config) -> Result<Electrum, StartupError> {
     let electrum_config = match config.bitcoin_backend.as_ref() {
         Some(config::BitcoinBackend::Electrum(electrum_config)) => electrum_config,
         _ => Err(StartupError::MissingBitcoindConfig)?, // TODO: fix error type
     };
     let client = bdk_electrum::electrum_client::Client::new(&electrum_config.addr.to_string())
-        .map_err(|e| StartupError::MissingBitcoindConfig)?; // TODO: fix error type
-    let mut db_conn = db.connection();
-    let descs = vec![
-        config.main_descriptor.receive_descriptor().clone(),
-        config.main_descriptor.change_descriptor().clone(),
-    ];
-    let bdk_wallet = bdk_wallet_from_db(&mut db_conn, &client, &descs).unwrap();
+        .map_err(|_e| StartupError::MissingBitcoindConfig)?; // TODO: fix error type
+    let server_features = client
+        .server_features()
+        .map_err(|_e| StartupError::MissingBitcoindConfig)?;
+    log::debug!("{:?}", server_features);
+    let server_genesis_hash = {
+        let mut hash = server_features.genesis_hash;
+        hash.reverse();
+        BlockHash::from_byte_array(hash)
+    };
+    println!("server genesis hash {}", server_genesis_hash.to_string());
+    let expected_hash = bitcoin::expected_genesis_hash(&config.bitcoin_config.network);
+    println!("expected genesis hash {}", expected_hash.to_string());
+    assert_eq!(server_genesis_hash, expected_hash);
+
+    let bdk_wallet = BdkWallet::new(config.bitcoin_config.network, server_genesis_hash);
+
     let ele = Electrum { client, bdk_wallet };
     Ok(ele)
 }
@@ -380,7 +391,7 @@ impl DaemonHandle {
             )
                 as sync::Arc<sync::Mutex<dyn BitcoinInterface>>,
             (None, Some(config::BitcoinBackend::Electrum(..))) => {
-                sync::Arc::from(sync::Mutex::from(setup_electrum(&config, &db)?))
+                sync::Arc::from(sync::Mutex::from(setup_electrum(&config)?))
                     as sync::Arc<sync::Mutex<dyn BitcoinInterface>>
             }
             _ => Err(StartupError::MissingBitcoinBackendConfig)?,

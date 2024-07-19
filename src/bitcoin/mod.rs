@@ -7,26 +7,24 @@ pub mod electrum;
 pub mod poller;
 
 use crate::{
-    bitcoin::{
-        d::{BitcoindError, CachedTxGetter, LSBlockEntry},
-        electrum::sync_through_bdk,
-    },
+    bitcoin::{d::BitcoindError, electrum::sync_through_bdk},
     database::{BlockInfo, Coin, DatabaseConnection},
     descriptors,
     poller::looper::UpdatedCoins,
 };
-use bdk_chain::bitcoin::bip32::ChildNumber;
 use bdk_electrum::{
     bdk_chain::local_chain::CheckPoint,
-    electrum_client::{ElectrumApi, Error, HeaderNotification},
+    electrum_client::{ElectrumApi, HeaderNotification},
 };
 pub use d::{MempoolEntry, SyncProgress};
-use electrum::coins_from_wallet;
+use electrum::{bdk_wallet_from_db, coins_from_wallet};
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     convert::TryInto,
-    fmt, sync,
+    fmt,
+    str::FromStr,
+    sync,
 };
 
 use miniscript::bitcoin::{self, address, secp256k1};
@@ -105,6 +103,12 @@ pub trait BitcoinInterface: Send {
         secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) -> UpdatedCoins;
 
+    fn init(
+        &mut self,
+        db_conn: &mut Box<dyn DatabaseConnection>,
+        descs: &[descriptors::SinglePathLianaDesc],
+        latest_tip: BlockChainTip,
+    ) -> bool;
     fn sync(&mut self, db_conn: &mut Box<dyn DatabaseConnection>);
 
     /// Get coins received since the specified tip.
@@ -175,7 +179,15 @@ pub trait BitcoinInterface: Send {
 }
 
 impl BitcoinInterface for d::BitcoinD {
-    fn sync(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {}
+    fn sync(&mut self, _db_conn: &mut Box<dyn DatabaseConnection>) {}
+    fn init(
+        &mut self,
+        _db_conn: &mut Box<dyn DatabaseConnection>,
+        _descs: &[descriptors::SinglePathLianaDesc],
+        _latest_tip: BlockChainTip,
+    ) -> bool {
+        true
+    }
 
     fn update_coins(
         &self,
@@ -445,6 +457,15 @@ impl BitcoinInterface for sync::Arc<sync::Mutex<dyn BitcoinInterface + 'static>>
         self.lock().unwrap().sync(db_conn)
     }
 
+    fn init(
+        &mut self,
+        db_conn: &mut Box<dyn DatabaseConnection>,
+        descs: &[descriptors::SinglePathLianaDesc],
+        latest_tip: BlockChainTip,
+    ) -> bool {
+        self.lock().unwrap().init(db_conn, descs, latest_tip)
+    }
+
     fn update_coins(
         &self,
         db_conn: &mut Box<dyn DatabaseConnection>,
@@ -545,25 +566,42 @@ pub struct UTxO {
 }
 
 impl BitcoinInterface for electrum::Electrum {
-    fn sync(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {
-        // let last_max_db_index = match db_conn.receive_index().max(db_conn.change_index()) {
-        //     ChildNumber::Normal { index } => index,
-        //     ChildNumber::Hardened { index } => index,
-        // }.saturating_sub(1); // we store the next index
+    fn init(
+        &mut self,
+        db_conn: &mut Box<dyn DatabaseConnection>,
+        descs: &[descriptors::SinglePathLianaDesc],
+        latest_tip: BlockChainTip,
+    ) -> bool {
+        if self.bdk_wallet.local_chain.tip().height() == 0 {
+            log::info!("Creating BDK wallet from DB for latest tip: {}", latest_tip);
+            let from_db = bdk_wallet_from_db(db_conn, &self.client, descs).unwrap();
+            // It would also be fine if the chain tip had advanced, but for simplicity check it's the same
+            // as latest tip as the poller requires this anyway before updating anything in the DB.
+            let tip = self.chain_tip();
+            if tip != latest_tip {
+                log::info!("New tip: {}", tip);
+                return false;
+            }
 
+            self.bdk_wallet = from_db;
+        }
+        true
+    }
+
+    fn sync(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {
         let mut last_active_indices = BTreeMap::new();
         // Note we store in DB the next derivation to be used for each, hence the -1 here.
         let deposit_index: u32 = db_conn.receive_index().into();
         println!("next deposit index {deposit_index}");
         last_active_indices.insert(
             electrum::KeychainType::Deposit,
-            deposit_index.saturating_sub(1),
+            deposit_index.saturating_add(200 - 1),
         );
         let change_index: u32 = db_conn.change_index().into();
         println!("next change index {change_index}");
         last_active_indices.insert(
             electrum::KeychainType::Change,
-            change_index.saturating_sub(1),
+            change_index.saturating_add(200 - 1),
         );
 
         let _ = self
@@ -583,10 +621,10 @@ impl BitcoinInterface for electrum::Electrum {
 
     fn update_coins(
         &self,
-        db_conn: &mut Box<dyn DatabaseConnection>,
-        previous_tip: &BlockChainTip,
-        descs: &[descriptors::SinglePathLianaDesc],
-        secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
+        _db_conn: &mut Box<dyn DatabaseConnection>,
+        _previous_tip: &BlockChainTip,
+        _descs: &[descriptors::SinglePathLianaDesc],
+        _secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) -> UpdatedCoins {
         // let receive_desc = descs.first().unwrap();
         // let change_desc = descs.last().unwrap();
@@ -597,7 +635,7 @@ impl BitcoinInterface for electrum::Electrum {
         .filter_map(|c|
             // Keep new and updated
             if existing_coins.get(c.0) != Some(c.1) {
-                Some(c)
+                Some((c.0.clone(), c.1))
                 // let desc_to_use = if c.is_change { change_desc } else { receive_desc };
                 // Some(UTxO {
                 //     outpoint: *op,
@@ -636,10 +674,11 @@ impl BitcoinInterface for electrum::Electrum {
             })
             .collect();
         let confirmed: Vec<_> = updated_coins
+            //.clone()
             .iter()
             .filter_map(|(op, c)| {
                 c.block_info
-                    .map(|info| (op.clone().clone(), info.height, info.time))
+                    .map(|info| (op.clone(), info.height, info.time))
             })
             .collect();
         let expired: Vec<_> = existing_coins
@@ -762,7 +801,7 @@ impl BitcoinInterface for electrum::Electrum {
     }
 
     fn common_ancestor(&self, tip: &BlockChainTip) -> Option<BlockChainTip> {
-        let new_tip_height = tip.height as u32;
+        let db_tip_height = tip.height as u32;
 
         //     // If electrum returns a tip height that is lower than our previous tip, then checkpoints do
         //     // not need updating. We just return the previous tip and use that as the point of agreement.
@@ -774,7 +813,7 @@ impl BitcoinInterface for electrum::Electrum {
         //     // Atomically fetch the latest `CHAIN_SUFFIX_LENGTH` count of blocks from Electrum. We use this
         //     // to construct our checkpoint update.
         let mut new_blocks = {
-            let start_height = new_tip_height.saturating_sub(CHAIN_SUFFIX_LENGTH - 1);
+            let start_height = db_tip_height.saturating_sub(CHAIN_SUFFIX_LENGTH - 1);
             let hashes = self
                 .client
                 .block_headers(start_height as _, CHAIN_SUFFIX_LENGTH as _)
@@ -793,14 +832,14 @@ impl BitcoinInterface for electrum::Electrum {
                 .local_chain
                 .tip()
                 .iter()
-                .filter(|cp| cp.height() <= new_tip_height)
+                .filter(|cp| cp.height() <= db_tip_height)
             {
                 let cp_block = cp.block_id();
                 let hash = match new_blocks.get(&cp_block.height) {
                     Some(&hash) => hash,
                     None => {
                         assert!(
-                            new_tip_height >= cp_block.height,
+                            db_tip_height >= cp_block.height,
                             "already checked that new tip cannot be smaller"
                         );
                         let hash = self
@@ -855,11 +894,11 @@ impl BitcoinInterface for electrum::Electrum {
             })
     }
 
-    fn mempool_entry(&self, txid: &bitcoin::Txid) -> Option<MempoolEntry> {
+    fn mempool_entry(&self, _txid: &bitcoin::Txid) -> Option<MempoolEntry> {
         None
     }
 
-    fn mempool_spenders(&self, outpoints: &[bitcoin::OutPoint]) -> Vec<MempoolEntry> {
+    fn mempool_spenders(&self, _outpoints: &[bitcoin::OutPoint]) -> Vec<MempoolEntry> {
         Vec::new()
     }
 
@@ -871,8 +910,8 @@ impl BitcoinInterface for electrum::Electrum {
 
     fn start_rescan(
         &self,
-        desc: &descriptors::LianaDescriptor,
-        timestamp: u32,
+        _desc: &descriptors::LianaDescriptor,
+        _timestamp: u32,
     ) -> Result<(), String> {
         todo!()
     }
@@ -881,7 +920,7 @@ impl BitcoinInterface for electrum::Electrum {
         None
     }
 
-    fn block_before_date(&self, timestamp: u32) -> Option<BlockChainTip> {
+    fn block_before_date(&self, _timestamp: u32) -> Option<BlockChainTip> {
         unimplemented!("db should not be marked as rescanning")
     }
 
