@@ -33,6 +33,26 @@ use miniscript::bitcoin::{self, address, secp256k1};
 
 pub const COINBASE_MATURITY: i32 = 100;
 
+/// The expected genesis block hash.
+pub fn expected_genesis_hash(network: &bitcoin::Network) -> bitcoin::BlockHash {
+    let hash = match network {
+        bitcoin::Network::Bitcoin => {
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+        }
+        bitcoin::Network::Signet => {
+            "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6"
+        }
+        bitcoin::Network::Testnet => {
+            "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943"
+        }
+        bitcoin::Network::Regtest => {
+            "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+        }
+        net => panic!("Unexpected network '{}'", net),
+    };
+    bitcoin::BlockHash::from_str(hash).expect("must be valid")
+}
+
 /// Information about a block
 #[derive(Debug, Clone, Eq, PartialEq, Copy)]
 pub struct Block {
