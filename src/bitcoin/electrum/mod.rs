@@ -5,13 +5,6 @@ use std::{
     sync::Arc,
 };
 
-// use bdk_chain::{
-//     bitcoin::{self, bip32, constants::genesis_block, hashes, ScriptBuf, TxOut},
-//     indexed_tx_graph,
-//     keychain::{self, KeychainTxOutIndex},
-//     local_chain::LocalChain,
-//     miniscript::{Descriptor, DescriptorPublicKey}, spk_client::SyncRequest, tx_graph::{self, TxGraph}, Anchor, BlockId, ConfirmationTimeHeightAnchor, IndexedTxGraph
-// };
 use bdk_electrum::{
     bdk_chain::{
         bitcoin::{
@@ -30,11 +23,11 @@ use bdk_electrum::{
     ElectrumExt,
 };
 
-use crate::{bitcoin::COINBASE_MATURITY, database::DatabaseConnection, descriptors};
-
-// The difference between the derivation index of the last seen used address and the last stored
-// address in the database addresses mapping.
-pub const ADDRESS_LOOK_AHEAD: u32 = 100;
+use crate::{
+    bitcoin::{COINBASE_MATURITY, LOOK_AHEAD_LIMIT},
+    database::DatabaseConnection,
+    descriptors,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KeychainType {
@@ -42,7 +35,7 @@ pub enum KeychainType {
     Change,
 }
 
-pub const ALL_KEYCHAINS: [KeychainType; 2] = [KeychainType::Deposit, KeychainType::Change];
+// pub const ALL_KEYCHAINS: [KeychainType; 2] = [KeychainType::Deposit, KeychainType::Change];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockInfo {
@@ -455,14 +448,12 @@ pub fn bdk_wallet_from_db(
     let local_chain = local_chain_from_db(db_conn, client);
     let mut bdk_wallet = BdkWallet {
         graph: {
-            let mut indexer = KeychainTxOutIndex::<KeychainType>::new(ADDRESS_LOOK_AHEAD);
+            let mut indexer = KeychainTxOutIndex::<KeychainType>::new(LOOK_AHEAD_LIMIT);
             let _ = indexer.insert_descriptor(KeychainType::Deposit, external_desc.clone());
             let _ = indexer.insert_descriptor(KeychainType::Change, internal_desc.clone());
             IndexedTxGraph::new(indexer)
         },
         network,
-        // reorg_height,
-        // next_height,
         local_chain,
         existing_coins: existing_coins
             .iter()
@@ -558,85 +549,21 @@ pub fn sync_through_bdk(
         eprint!("Scanning {:?}: {}", k, spk_i);
         spk
     }));
-    // let unused_spks = bdk_wallet
-    //     .graph
-    //     .index
-    //     .unused_spks()
-    //     .map(|(k, i, spk)| (k, i, spk.to_owned()))
-    //     .collect::<Vec<_>>();
-    // request = request.chain_spks(unused_spks.into_iter().map(move |(k, spk_i, spk)| {
-    //     eprint!(
-    //         "Checking if address {} {}:{} has been used",
-    //         bitcoin::Address::from_script(&spk, network).unwrap(),
-    //         k,
-    //         spk_i,
-    //     );
-    //     spk
-    // }));
-
-    // let init_outpoints = bdk_wallet.graph.index.outpoints();
-
-    // let utxos = bdk_wallet
-    //     .graph
-    //     .graph()
-    //     .filter_chain_unspents(
-    //         &bdk_wallet.local_chain,
-    //         chain_tip.block_id(),
-    //         init_outpoints,
-    //     )
-    //     .map(|(_, utxo)| utxo)
-    //     .collect::<Vec<_>>();
-    // request = request.chain_outpoints(utxos.into_iter().map(|utxo| {
-    //     eprint!(
-    //         "Checking if outpoint {} (value: {}) has been spent",
-    //         utxo.outpoint, utxo.txout.value
-    //     );
-    //     utxo.outpoint
-    // }));
-
-    // let unconfirmed_txids = bdk_wallet
-    //     .graph
-    //     .graph()
-    //     .list_chain_txs(&bdk_wallet.local_chain, chain_tip.block_id())
-    //     .filter(|canonical_tx| !canonical_tx.chain_position.is_confirmed())
-    //     .map(|canonical_tx| canonical_tx.tx_node.txid)
-    //     .collect::<Vec<bitcoin::Txid>>();
-
-    // request = request.chain_txids(
-    //     unconfirmed_txids
-    //         .into_iter()
-    //         .inspect(|txid| eprint!("Checking if {} is confirmed yet", txid)),
-    // );
 
     let total_spks = request.spks.len();
     println!("total_spks: {total_spks}");
-    // let total_txids = request.txids.len();
-    // let total_ops = request.outpoints.len();
-    request = request
-        .inspect_spks({
-            let mut visited = 0;
-            move |_| {
-                visited += 1;
-                eprintln!("inspect_spks [ {:>6.2}% ]", (visited * 100) as f32 / total_spks as f32)
-            }
-        })
-        // .inspect_txids({
-        //     let mut visited = 0;
-        //     move |_| {
-        //         visited += 1;
-        //         eprintln!("inspect_txids [ {:>6.2}% ]", (visited * 100) as f32 / total_txids as f32)
-        //     }
-        // })
-        // .inspect_outpoints({
-        //     let mut visited = 0;
-        //     move |_| {
-        //         visited += 1;
-        //         eprintln!("inspect_outpoints [ {:>6.2}% ]", (visited * 100) as f32 / total_ops as f32)
-        //     }
-        // })
-        ;
 
-    //let sync_result = client.sync(request, 10, true).unwrap().with_confirmation_height_anchor();
+    request = request.inspect_spks({
+        let mut visited = 0;
+        move |_| {
+            visited += 1;
+            eprintln!(
+                "inspect_spks [ {:>6.2}% ]",
+                (visited * 100) as f32 / total_spks as f32
+            )
+        }
+    });
+
     let sync_result = client
         .sync(request, 10, true)
         .unwrap()
@@ -646,7 +573,6 @@ pub fn sync_through_bdk(
         "sync_through_bdk: chain_update: {}",
         sync_result.chain_update.height()
     );
-    //let mut local_chain = bdk_wallet.local_chain;
     let _ = bdk_wallet
         .local_chain
         .apply_update(sync_result.chain_update)
@@ -660,31 +586,19 @@ pub fn sync_through_bdk(
     let _ = bdk_wallet.graph.apply_update(graph_update);
 }
 
-pub fn coins_from_wallet(
-    bdk_wallet: &BdkWallet,
-    //existing_coins: HashMap<bitcoin::OutPoint, Coin>,
-) -> Vec<Coin> {
-    // let existing_coins: HashMap<_, _> = bdk_wallet
-    //     .existing_coins
-    //     .iter()
-    //     .map(|c| (c.outpoint, c))
-    //     .collect();
-
+pub fn coins_from_wallet(bdk_wallet: &BdkWallet) -> Vec<Coin> {
     // Get an iterator over all the wallet txos (not only the currently unspent ones) by using
-    // lower level methods.  Thanks to Evan Linjin for the pointers on how to achieve that.
-    // See also https://github.com/bitcoindevkit/bdk/issues/1184.
+    // lower level methods.
     let tx_graph = bdk_wallet.graph.graph();
     let txo_index = &bdk_wallet.graph.index;
     let tip_id = bdk_wallet.local_chain.tip().block_id();
     let wallet_txos =
         tx_graph.filter_chain_txouts(&bdk_wallet.local_chain, tip_id, txo_index.outpoints());
 
-    //let mut wallet_outpoints = HashSet::new();
     let mut wallet_coins = Vec::new();
     // Go through all the wallet txos and create a DB coin for each.
     for ((k, i), full_txo) in wallet_txos {
         let outpoint = full_txo.outpoint;
-        //let ex_coin = existing_coins.get(&outpoint);
 
         let amount = full_txo.txout.value;
         let derivation_index = i.into();
@@ -727,33 +641,18 @@ pub fn coins_from_wallet(
             spend_block,
         };
         wallet_coins.push(coin);
-        //wallet_outpoints.insert(coin.outpoint);
-        // Updated coins are those wallet coins that are not the same as any existing coin,
-        // either because they are new or have been updated.
-        // if ex_coin.cloned() != Some(&coin) {
-        //     updated_coins.push(coin);
-        // }
     }
     println!(
         "coins from wallet: wallet coins length: {}",
         wallet_coins.len()
     );
     wallet_coins
-    // Drop any coins that are not unbroadcast and do not appear in the wallet coins.
-    // let dropped_coins: Vec<_> = existing_coins
-    //     .into_values()
-    //     .filter(|ex_coin| !wallet_outpoints.contains(&ex_coin.outpoint))
-    //     .cloned()
-    //     .collect();
-    // (updated_coins, dropped_coins)
 }
 
 pub struct Electrum {
     /// Client for generalistic calls.
     pub client: ElectrumClient, // TODO: remove pub
     pub bdk_wallet: BdkWallet,
-    // pub prev_tip: CheckPoint,
-    // pub graph: IndexedTxGraph<BlockInfo, KeychainTxOutIndex<KeychainType>>,
 }
 
 impl Electrum {}
