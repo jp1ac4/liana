@@ -31,6 +31,10 @@ use miniscript::bitcoin::{self, address, secp256k1};
 
 pub const COINBASE_MATURITY: i32 = 100;
 
+/// The number of script pubkeys to derive and cache from the descriptors
+/// over and above the last revealed script index.
+pub const LOOK_AHEAD_LIMIT: u32 = 200;
+
 /// The expected genesis block hash.
 pub fn expected_genesis_hash(network: &bitcoin::Network) -> bitcoin::BlockHash {
     let hash = match network {

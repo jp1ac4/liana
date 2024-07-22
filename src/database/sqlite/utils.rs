@@ -1,10 +1,11 @@
-use crate::database::sqlite::{FreshDbOptions, SqliteDbError, DB_VERSION};
+use crate::{
+    bitcoin::LOOK_AHEAD_LIMIT,
+    database::sqlite::{FreshDbOptions, SqliteDbError, DB_VERSION},
+};
 
 use std::{convert::TryInto, fs, path, time};
 
 use miniscript::bitcoin::secp256k1;
-
-pub const LOOK_AHEAD_LIMIT: u32 = 200;
 
 /// Perform a set of modifications to the database inside a single transaction
 pub fn db_exec<F>(conn: &mut rusqlite::Connection, modifications: F) -> Result<(), rusqlite::Error>

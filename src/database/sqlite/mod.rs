@@ -11,7 +11,7 @@ pub mod schema;
 mod utils;
 
 use crate::{
-    bitcoin::BlockChainTip,
+    bitcoin::{BlockChainTip, LOOK_AHEAD_LIMIT},
     database::{
         sqlite::{
             schema::{
@@ -20,7 +20,7 @@ use crate::{
             },
             utils::{
                 create_fresh_db, curr_timestamp, db_exec, db_query, db_tx_query, db_version,
-                maybe_apply_migration, LOOK_AHEAD_LIMIT,
+                maybe_apply_migration,
             },
         },
         Coin, CoinStatus, LabelItem,
