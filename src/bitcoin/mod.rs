@@ -599,13 +599,13 @@ impl BitcoinInterface for electrum::Electrum {
         println!("next deposit index {deposit_index}");
         last_active_indices.insert(
             electrum::KeychainType::Deposit,
-            deposit_index.saturating_add(200 - 1),
+            deposit_index.saturating_sub(1),
         );
         let change_index: u32 = db_conn.change_index().into();
         println!("next change index {change_index}");
         last_active_indices.insert(
             electrum::KeychainType::Change,
-            change_index.saturating_add(200 - 1),
+            change_index.saturating_sub(1),
         );
 
         let _ = self
@@ -625,10 +625,10 @@ impl BitcoinInterface for electrum::Electrum {
 
     fn update_coins(
         &self,
-        _db_conn: &mut Box<dyn DatabaseConnection>,
+        db_conn: &mut Box<dyn DatabaseConnection>,
         _previous_tip: &BlockChainTip,
         _descs: &[descriptors::SinglePathLianaDesc],
-        _secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
+        secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) -> UpdatedCoins {
         // let receive_desc = descs.first().unwrap();
         // let change_desc = descs.last().unwrap();
@@ -656,6 +656,13 @@ impl BitcoinInterface for electrum::Electrum {
             .values()
             .filter_map(|c| {
                 if !existing_coins.contains_key(&c.outpoint) {
+                    if c.derivation_index > db_conn.receive_index() {
+                        db_conn.set_receive_index(c.derivation_index, secp);
+                    }
+                    if c.derivation_index > db_conn.change_index() {
+                        db_conn.set_change_index(c.derivation_index, secp);
+                    }
+
                     Some(Coin {
                         outpoint: c.outpoint,
                         is_immature: c.is_immature,
