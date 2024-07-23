@@ -14,7 +14,7 @@ pub mod spend;
 mod testutils;
 
 pub use bip39;
-use bitcoin::electrum::{sanity_checks, BdkWallet, Electrum, ElectrumError};
+use bitcoin::electrum::{bdk_wallet_from_db, Electrum, ElectrumClient, ElectrumError};
 pub use miniscript;
 
 pub use crate::bitcoin::d::{BitcoinD, BitcoindError, WalletError};
@@ -93,6 +93,7 @@ pub enum StartupError {
     DefaultDataDirNotFound,
     DatadirCreation(path::PathBuf, io::Error),
     MissingBitcoindConfig,
+    MissingElectrumConfig,
     MissingBitcoinBackendConfig,
     Database(SqliteDbError),
     Bitcoind(BitcoindError),
@@ -118,6 +119,10 @@ impl fmt::Display for StartupError {
             Self::MissingBitcoindConfig => write!(
                 f,
                 "Our Bitcoin interface is bitcoind but we have no 'bitcoind_config' entry in the configuration."
+            ),
+            Self::MissingElectrumConfig => write!(
+                f,
+                "Our Bitcoin interface is Electrum but we have no 'electrum_config' entry in the configuration."
             ),
             Self::MissingBitcoinBackendConfig => write!(
                 f,
@@ -211,32 +216,37 @@ fn setup_sqlite(
     Ok(sqlite)
 }
 
-fn setup_electrum(config: &Config) -> Result<Electrum, StartupError> {
+fn setup_electrum(
+    config: &Config,
+    db: sync::Arc<sync::Mutex<dyn DatabaseInterface>>,
+) -> Result<Electrum, StartupError> {
     let electrum_config = match config.bitcoin_backend.as_ref() {
         Some(config::BitcoinBackend::Electrum(electrum_config)) => electrum_config,
-        _ => Err(StartupError::MissingBitcoindConfig)?, // TODO: fix error type
+        _ => Err(StartupError::MissingElectrumConfig)?,
     };
-    let client = bdk_electrum::electrum_client::Client::new(&electrum_config.addr.to_string())
-        .map_err(|e| StartupError::Electrum(ElectrumError::Server(e)))?;
-    sanity_checks(&client, &config.bitcoin_config.network)
+    let client = ElectrumClient::new(&electrum_config.addr.to_string())
+        .map_err(|e| StartupError::Electrum(e))?;
+    client
+        .sanity_checks(&config.bitcoin_config.network)
         .map_err(|e| StartupError::Electrum(e))?;
 
-    let bdk_wallet = BdkWallet::new(
-        config.bitcoin_config.network,
-        config
-            .main_descriptor
-            .receive_descriptor()
-            .as_descriptor_public_key()
-            .clone(),
-        config
-            .main_descriptor
-            .change_descriptor()
-            .as_descriptor_public_key()
-            .clone(),
-    );
+    let receive_desc = config
+        .main_descriptor
+        .receive_descriptor()
+        .as_descriptor_public_key()
+        .clone();
 
-    let ele = Electrum { client, bdk_wallet };
-    Ok(ele)
+    let change_desc = config
+        .main_descriptor
+        .receive_descriptor()
+        .as_descriptor_public_key()
+        .clone();
+
+    let mut db_conn = db.connection();
+    let bdk_wallet = bdk_wallet_from_db(&mut db_conn, &client, receive_desc, change_desc).unwrap();
+
+    let electrum = Electrum { client, bdk_wallet };
+    Ok(electrum)
 }
 
 // Connect to bitcoind. Setup the watchonly wallet, and do some sanity checks.
@@ -392,7 +402,7 @@ impl DaemonHandle {
             )
                 as sync::Arc<sync::Mutex<dyn BitcoinInterface>>,
             (None, Some(config::BitcoinBackend::Electrum(..))) => {
-                sync::Arc::from(sync::Mutex::from(setup_electrum(&config)?))
+                sync::Arc::from(sync::Mutex::from(setup_electrum(&config, db.clone())?))
                     as sync::Arc<sync::Mutex<dyn BitcoinInterface>>
             }
             _ => Err(StartupError::MissingBitcoinBackendConfig)?,

@@ -104,11 +104,6 @@ fn updates(
     };
     println!("updates: latest tip is {}", latest_tip.height);
 
-    if !bit.init(db_conn, descs, latest_tip) {
-        log::info!("Restarting updates");
-        return updates(db_conn, bit, descs, secp);
-    }
-
     // Then check the state of our coins. Do it even if the tip did not change since last poll, as
     // we may have unconfirmed transactions.
     let updated_coins = bit.update_coins(db_conn, &current_tip, descs, secp);
