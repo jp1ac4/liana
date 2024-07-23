@@ -5,13 +5,10 @@ use std::{
     sync::Arc,
 };
 
+use bdk_chain::bitcoin::OutPoint;
 use bdk_electrum::{
     bdk_chain::{
-        bitcoin::{
-            self, bip32,
-            hashes::{self, Hash},
-            BlockHash, Network, ScriptBuf, TxOut,
-        },
+        bitcoin::{self, bip32, hashes::Hash, BlockHash, ScriptBuf, TxOut},
         keychain::KeychainTxOutIndex,
         local_chain::{self, CheckPoint, LocalChain},
         miniscript::{Descriptor, DescriptorPublicKey},
@@ -24,10 +21,34 @@ use bdk_electrum::{
 };
 
 use crate::{
-    bitcoin::{COINBASE_MATURITY, LOOK_AHEAD_LIMIT},
+    bitcoin::{expected_genesis_hash, COINBASE_MATURITY, LOOK_AHEAD_LIMIT},
     database::DatabaseConnection,
-    descriptors,
 };
+
+/// An error in the Electrum interface.
+#[derive(Debug)]
+pub enum ElectrumError {
+    Server(bdk_electrum::electrum_client::Error),
+    NetworkMismatch(
+        BlockHash, /*expected hash*/
+        BlockHash, /*actual hash*/
+    ),
+}
+
+impl std::fmt::Display for ElectrumError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            ElectrumError::Server(e) => write!(f, "Electrum error: {}", e),
+            ElectrumError::NetworkMismatch(expected_hash, actual_hash) => {
+                write!(
+                    f,
+                    "Network mismatch. The genesis hash is expected to be '{}' but was found to be '{}'.",
+                    expected_hash, actual_hash
+                )
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum KeychainType {
@@ -75,27 +96,175 @@ impl From<ConfirmationTimeHeightAnchor> for BlockInfo {
 
 pub struct BdkWallet {
     pub graph: IndexedTxGraph<BlockInfo, KeychainTxOutIndex<KeychainType>>,
-    pub network: Network,
+    //pub network: Network,
     // pub reorg_height: Option<u32>,
     /// Height of the next block to receive.
     // pub next_height: u32,
     pub local_chain: LocalChain,
-    pub existing_coins: HashMap<bitcoin::OutPoint, Coin>,
-    pub wallet_coins: HashMap<bitcoin::OutPoint, Coin>,
+    pub receive_desc: Descriptor<DescriptorPublicKey>,
+    pub change_desc: Descriptor<DescriptorPublicKey>,
 }
 
 impl BdkWallet {
-    pub fn new(network: bitcoin::Network, genesis_hash: bitcoin::BlockHash) -> Self {
+    pub fn new(
+        network: bitcoin::Network,
+        receive_desc: Descriptor<DescriptorPublicKey>,
+        change_desc: Descriptor<DescriptorPublicKey>,
+    ) -> Self {
+        let genesis_hash = expected_genesis_hash(&network);
         BdkWallet {
             graph: IndexedTxGraph::default(),
-            network,
+            //network,
             local_chain: LocalChain::from_genesis_hash(genesis_hash).0,
-            existing_coins: HashMap::new(),
-            wallet_coins: HashMap::new(),
+            receive_desc,
+            change_desc,
         }
+    }
+
+    fn spk(&self, der_index: bip32::ChildNumber, is_change: bool) -> ScriptBuf {
+        // Try to get it from the BDK wallet cache first, failing that derive it from the appropriate
+        // descriptor.
+        let chain_kind = if is_change {
+            KeychainType::Change
+        } else {
+            KeychainType::Deposit
+        };
+        if let Some(spk) = self.graph.index.spk_at_index(chain_kind, der_index.into()) {
+            spk.to_owned()
+        } else {
+            let desc = if is_change {
+                &self.change_desc
+            } else {
+                &self.receive_desc
+            };
+            desc.at_derivation_index(der_index.into())
+                .expect("Not multipath and index isn't hardened.")
+                .script_pubkey()
+        }
+    }
+
+    pub fn coins(&self) -> HashMap<OutPoint, Coin> {
+        // Get an iterator over all the wallet txos (not only the currently unspent ones) by using
+        // lower level methods.
+        let tx_graph = self.graph.graph();
+        let txo_index = &self.graph.index;
+        let tip_id = self.local_chain.tip().block_id();
+        let wallet_txos =
+            tx_graph.filter_chain_txouts(&self.local_chain, tip_id, txo_index.outpoints());
+
+        let mut wallet_coins = Vec::new();
+        // Go through all the wallet txos and create a DB coin for each.
+        for ((k, i), full_txo) in wallet_txos {
+            let outpoint = full_txo.outpoint;
+
+            let amount = full_txo.txout.value;
+            let derivation_index = i.into();
+            let is_change = matches!(k, KeychainType::Change);
+            let block_info = match full_txo.chain_position {
+                ChainPosition::Unconfirmed(_) => None,
+                ChainPosition::Confirmed(anchor) => Some(anchor),
+            };
+
+            // Immature if from a coinbase transaction with less than a hundred confs.
+            let is_immature = full_txo.is_on_coinbase
+                && block_info
+                    .and_then(|blk| {
+                        let tip_height: i32 = tip_id.height.try_into().expect("i32 by consensus");
+                        tip_height
+                            .checked_sub(blk.height)
+                            .map(|confs| confs < COINBASE_MATURITY as i32)
+                    })
+                    .unwrap_or(true);
+
+            // Get spend status of this coin.
+            let (mut spend_txid, mut spend_block) = (None, None);
+            if let Some((spend_pos, txid)) = full_txo.spent_by {
+                spend_txid = Some(txid);
+                spend_block = match spend_pos {
+                    ChainPosition::Confirmed(anchor) => Some(anchor),
+                    ChainPosition::Unconfirmed(_) => None,
+                };
+            }
+
+            // Create the coin and if it doesn't exist or was modified, return it.
+            let coin = Coin {
+                outpoint,
+                amount,
+                derivation_index,
+                is_change,
+                is_immature,
+                block_info,
+                spend_txid,
+                spend_block,
+            };
+            wallet_coins.push(coin);
+        }
+        println!(
+            "coins from wallet: wallet coins length: {}",
+            wallet_coins.len()
+        );
+        wallet_coins.into_iter().map(|c| (c.outpoint, c)).collect()
+    }
+
+    pub fn sync_through_electrum(&mut self, client: &ElectrumClient) {
+        let chain_tip = self.local_chain.tip();
+        println!(
+            "sync_through_electrum: local chain tip: {}",
+            chain_tip.block_id().height
+        );
+
+        let mut request =
+            SyncRequest::from_chain_tip(chain_tip.clone()).cache_graph_txs(self.graph.graph());
+
+        let all_spks = self
+            .graph
+            .index
+            .revealed_spks(..)
+            .map(|(k, i, spk)| (k.to_owned(), i, spk.to_owned()))
+            .collect::<Vec<_>>();
+        request = request.chain_spks(all_spks.into_iter().map(|(k, spk_i, spk)| {
+            eprint!("Scanning {:?}: {}", k, spk_i);
+            spk
+        }));
+
+        let total_spks = request.spks.len();
+        println!("total_spks: {total_spks}");
+
+        request = request.inspect_spks({
+            let mut visited = 0;
+            move |_| {
+                visited += 1;
+                eprintln!(
+                    "inspect_spks [ {:>6.2}% ]",
+                    (visited * 100) as f32 / total_spks as f32
+                )
+            }
+        });
+
+        let sync_result = client
+            .sync(request, 10, true)
+            .unwrap()
+            .with_confirmation_time_height_anchor(client)
+            .unwrap();
+        println!(
+            "sync_through_electrum: chain_update: {}",
+            sync_result.chain_update.height()
+        );
+        let _ = self
+            .local_chain
+            .apply_update(sync_result.chain_update)
+            .unwrap();
+
+        let graph_update = sync_result.graph_update.map_anchors(|a| BlockInfo {
+            hash: a.anchor_block.hash,
+            time: a.confirmation_time.try_into().unwrap(),
+            height: a.confirmation_height.try_into().unwrap(),
+        });
+        let _ = self.graph.apply_update(graph_update);
     }
 }
 
+// Same as `database::Coin` except `BlockInfo` contains hash.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Coin {
     pub outpoint: bitcoin::OutPoint,
@@ -322,11 +491,11 @@ pub fn list_coins(
                     }
                 };
                 // TODO: change once versions match
-                let hash_bdk = hashes::Hash::from_byte_array(*hash.as_raw_hash().as_byte_array());
+                //let hash_bdk = hashes::Hash::from_byte_array(*hash.as_raw_hash().as_byte_array());
                 BlockInfo {
                     height: info.height,
                     time: info.time,
-                    hash: bitcoin::BlockHash::from_raw_hash(hash_bdk),
+                    hash, //: bitcoin::BlockHash::from_raw_hash(hash_bdk),
                 }
             });
             let spend_block = c.spend_block.map(|info| {
@@ -341,11 +510,11 @@ pub fn list_coins(
                     }
                 };
                 // TODO: change once versions match
-                let hash_bdk = hashes::Hash::from_byte_array(*hash.as_raw_hash().as_byte_array());
+                //let hash_bdk = hashes::Hash::from_byte_array(*hash.as_raw_hash().as_byte_array());
                 BlockInfo {
                     height: info.height,
                     time: info.time,
-                    hash: bitcoin::BlockHash::from_raw_hash(hash_bdk),
+                    hash: hash, //bitcoin::BlockHash::from_raw_hash(hash_bdk),
                 }
             });
             Coin {
@@ -371,53 +540,38 @@ pub fn list_coins(
         .collect()
 }
 
-// fn wallet_heights(
-//     db_conn: &mut Box<dyn DatabaseConnection>,
-//     bit: &impl BitcoinInterface,
-// ) -> (u32, Option<u32>) {
-//     let current_tip = db_conn.chain_tip().expect("Always set at first startup");
-//     match new_tip(bit, &current_tip) {
-//         TipUpdate::Same => (current_tip.height.try_into().unwrap(), None),
-//         TipUpdate::Progress(new_tip) => (new_tip.height.try_into().unwrap(), None),
-//         TipUpdate::Reorged(new_tip) => (
-//             new_tip.height.try_into().unwrap(),
-//             Some(new_tip.height.try_into().unwrap()),
-//         ),
+// Get the scriptpubkey at this derivation index from the corresponding keychain efficiently.
+// fn get_spk_from_wallet(
+//     bdk_wallet: &BdkWallet,
+//     change_desc: &Descriptor<DescriptorPublicKey>,
+//     receive_desc: &Descriptor<DescriptorPublicKey>,
+//     der_index: bip32::ChildNumber,
+//     is_change: bool,
+// ) -> ScriptBuf {
+//     // Try to get it from the BDK wallet cache first, failing that derive it from the appropriate
+//     // descriptor.
+//     let chain_kind = if is_change {
+//         KeychainType::Change
+//     } else {
+//         KeychainType::Deposit
+//     };
+//     if let Some(spk) = bdk_wallet
+//         .graph
+//         .index
+//         .spk_at_index(chain_kind, der_index.into())
+//     {
+//         spk.to_owned()
+//     } else {
+//         let desc = if is_change {
+//             &change_desc
+//         } else {
+//             &receive_desc
+//         };
+//         desc.at_derivation_index(der_index.into())
+//             .expect("Not multipath and index isn't hardened.")
+//             .script_pubkey()
 //     }
 // }
-
-// Get the scriptpubkey at this derivation index from the corresponding keychain efficiently.
-fn get_spk_from_wallet(
-    bdk_wallet: &BdkWallet,
-    internal_desc: &Descriptor<DescriptorPublicKey>,
-    external_desc: &Descriptor<DescriptorPublicKey>,
-    der_index: bip32::ChildNumber,
-    is_change: bool,
-) -> ScriptBuf {
-    // Try to get it from the BDK wallet cache first, failing that derive it from the appropriate
-    // descriptor.
-    let chain_kind = if is_change {
-        KeychainType::Change
-    } else {
-        KeychainType::Deposit
-    };
-    if let Some(spk) = bdk_wallet
-        .graph
-        .index
-        .spk_at_index(chain_kind, der_index.into())
-    {
-        spk.to_owned()
-    } else {
-        let desc = if is_change {
-            &internal_desc
-        } else {
-            &external_desc
-        };
-        desc.at_derivation_index(der_index.into())
-            .expect("Not multipath and index isn't hardened.")
-            .script_pubkey()
-    }
-}
 
 // Apply existing data from the database to the BDK wallet.
 // This assumes all block info in the DB is valid for the current tip so we
@@ -425,50 +579,46 @@ fn get_spk_from_wallet(
 pub fn bdk_wallet_from_db(
     db_conn: &mut Box<dyn DatabaseConnection>,
     client: &impl ElectrumApi,
-    descs: &[descriptors::SinglePathLianaDesc],
+    //descs: &[descriptors::SinglePathLianaDesc],
+    receive_desc: Descriptor<DescriptorPublicKey>,
+    change_desc: Descriptor<DescriptorPublicKey>,
 ) -> Result<BdkWallet, Box<dyn std::error::Error>> {
     println!("setting up BDK wallet from DB");
-    let network = db_conn.network();
+    //let network = db_conn.network();
 
     let existing_coins = list_coins(db_conn, client);
     let existing_txs = list_transactions(db_conn);
     // Transform the multipath descriptor we store in DB in two descriptors, as expected by
     // BDK.
-    #[allow(clippy::get_first)]
-    let external_desc = descs
-        .get(0)
-        .expect("Always multipath desc in DB")
-        .as_descriptor_public_key();
-    let internal_desc = descs
-        .get(1)
-        .expect("Always multipath desc in DB")
-        .as_descriptor_public_key();
+    // #[allow(clippy::get_first)]
+    // let external_desc = descs
+    //     .get(0)
+    //     .expect("Always multipath desc in DB")
+    //     .as_descriptor_public_key();
+    // let internal_desc = descs
+    //     .get(1)
+    //     .expect("Always multipath desc in DB")
+    //     .as_descriptor_public_key();
 
     //let (next_height, reorg_height) = wallet_heights(db_conn, bit);
     let local_chain = local_chain_from_db(db_conn, client);
     let mut bdk_wallet = BdkWallet {
         graph: {
             let mut indexer = KeychainTxOutIndex::<KeychainType>::new(LOOK_AHEAD_LIMIT);
-            let _ = indexer.insert_descriptor(KeychainType::Deposit, external_desc.clone());
-            let _ = indexer.insert_descriptor(KeychainType::Change, internal_desc.clone());
+            let _ = indexer.insert_descriptor(KeychainType::Deposit, receive_desc.clone());
+            let _ = indexer.insert_descriptor(KeychainType::Change, change_desc.clone());
             IndexedTxGraph::new(indexer)
         },
-        network,
+        //network,
         local_chain,
-        existing_coins: existing_coins
-            .iter()
-            .map(|c| (c.outpoint.clone(), c.clone()))
-            .collect(),
-        wallet_coins: existing_coins
-            .iter()
-            .map(|c| (c.outpoint.clone(), c.clone()))
-            .collect(),
+        receive_desc,//: external_desc.clone(),
+        change_desc,//: internal_desc.clone(),
     };
     // Update the last used derivation index for both change and receive addresses. Note we store
     // in DB the next derivation to be used for each, hence the -1 here.
     let mut last_active_indices = BTreeMap::new();
-    let deposit_index: u32 = db_conn.receive_index().into();
-    last_active_indices.insert(KeychainType::Deposit, deposit_index.saturating_sub(1));
+    let receive_index: u32 = db_conn.receive_index().into();
+    last_active_indices.insert(KeychainType::Deposit, receive_index.saturating_sub(1));
     let change_index: u32 = db_conn.change_index().into();
     last_active_indices.insert(KeychainType::Change, change_index.saturating_sub(1));
     let _ = bdk_wallet
@@ -484,13 +634,7 @@ pub fn bdk_wallet_from_db(
     }
     for coin in existing_coins {
         // First of all insert the txout itself.
-        let script_pubkey = get_spk_from_wallet(
-            &bdk_wallet,
-            &internal_desc,
-            &external_desc,
-            coin.derivation_index,
-            coin.is_change,
-        );
+        let script_pubkey = bdk_wallet.spk(coin.derivation_index, coin.is_change);
         let txout = TxOut {
             script_pubkey,
             value: coin.amount,
@@ -521,133 +665,136 @@ pub fn bdk_wallet_from_db(
     Ok(bdk_wallet)
 }
 
-pub fn sync_through_bdk(
-    //db_conn: &mut Box<dyn DatabaseConnection>,
-    bdk_wallet: &mut BdkWallet,
-    client: &ElectrumClient,
-) {
-    //let network = bdk_wallet.network;
-    let chain_tip = bdk_wallet.local_chain.tip();
-    println!(
-        "sync_through_bdk: local chain tip: {}",
-        chain_tip.block_id().height
-    );
+// pub fn sync_through_bdk(
+//     //db_conn: &mut Box<dyn DatabaseConnection>,
+//     bdk_wallet: &mut BdkWallet,
+//     client: &ElectrumClient,
+// ) {
+//     //let network = bdk_wallet.network;
+//     let chain_tip = bdk_wallet.local_chain.tip();
+//     println!(
+//         "sync_through_bdk: local chain tip: {}",
+//         chain_tip.block_id().height
+//     );
 
-    //bdk_wallet.local_chain.disconnect_from(block_id)
+//     //bdk_wallet.local_chain.disconnect_from(block_id)
 
-    //let spks = bdk_wallet.graph.index.all_unbounded_spk_iters();
-    let mut request =
-        SyncRequest::from_chain_tip(chain_tip.clone()).cache_graph_txs(bdk_wallet.graph.graph());
+//     //let spks = bdk_wallet.graph.index.all_unbounded_spk_iters();
+//     let mut request =
+//         SyncRequest::from_chain_tip(chain_tip.clone()).cache_graph_txs(bdk_wallet.graph.graph());
 
-    let all_spks = bdk_wallet
-        .graph
-        .index
-        .revealed_spks(..)
-        .map(|(k, i, spk)| (k.to_owned(), i, spk.to_owned()))
-        .collect::<Vec<_>>();
-    request = request.chain_spks(all_spks.into_iter().map(|(k, spk_i, spk)| {
-        eprint!("Scanning {:?}: {}", k, spk_i);
-        spk
-    }));
+//     let all_spks = bdk_wallet
+//         .graph
+//         .index
+//         .revealed_spks(..)
+//         .map(|(k, i, spk)| (k.to_owned(), i, spk.to_owned()))
+//         .collect::<Vec<_>>();
+//     request = request.chain_spks(all_spks.into_iter().map(|(k, spk_i, spk)| {
+//         eprint!("Scanning {:?}: {}", k, spk_i);
+//         spk
+//     }));
 
-    let total_spks = request.spks.len();
-    println!("total_spks: {total_spks}");
+//     let total_spks = request.spks.len();
+//     println!("total_spks: {total_spks}");
 
-    request = request.inspect_spks({
-        let mut visited = 0;
-        move |_| {
-            visited += 1;
-            eprintln!(
-                "inspect_spks [ {:>6.2}% ]",
-                (visited * 100) as f32 / total_spks as f32
-            )
-        }
-    });
+//     request = request.inspect_spks({
+//         let mut visited = 0;
+//         move |_| {
+//             visited += 1;
+//             eprintln!(
+//                 "inspect_spks [ {:>6.2}% ]",
+//                 (visited * 100) as f32 / total_spks as f32
+//             )
+//         }
+//     });
 
-    let sync_result = client
-        .sync(request, 10, true)
-        .unwrap()
-        .with_confirmation_time_height_anchor(client)
-        .unwrap();
-    println!(
-        "sync_through_bdk: chain_update: {}",
-        sync_result.chain_update.height()
-    );
-    let _ = bdk_wallet
-        .local_chain
-        .apply_update(sync_result.chain_update)
-        .unwrap();
+//     let sync_result = client
+//         .sync(request, 10, true)
+//         .unwrap()
+//         .with_confirmation_time_height_anchor(client)
+//         .unwrap();
+//     println!(
+//         "sync_through_bdk: chain_update: {}",
+//         sync_result.chain_update.height()
+//     );
+//     let _ = bdk_wallet
+//         .local_chain
+//         .apply_update(sync_result.chain_update)
+//         .unwrap();
 
-    let graph_update = sync_result.graph_update.map_anchors(|a| BlockInfo {
-        hash: a.anchor_block.hash,
-        time: a.confirmation_time.try_into().unwrap(),
-        height: a.confirmation_height.try_into().unwrap(),
-    });
-    let _ = bdk_wallet.graph.apply_update(graph_update);
-}
+//     let graph_update = sync_result.graph_update.map_anchors(|a| BlockInfo {
+//         hash: a.anchor_block.hash,
+//         time: a.confirmation_time.try_into().unwrap(),
+//         height: a.confirmation_height.try_into().unwrap(),
+//     });
+//     let _ = bdk_wallet.graph.apply_update(graph_update);
+// }
 
-pub fn coins_from_wallet(bdk_wallet: &BdkWallet) -> Vec<Coin> {
-    // Get an iterator over all the wallet txos (not only the currently unspent ones) by using
-    // lower level methods.
-    let tx_graph = bdk_wallet.graph.graph();
-    let txo_index = &bdk_wallet.graph.index;
-    let tip_id = bdk_wallet.local_chain.tip().block_id();
-    let wallet_txos =
-        tx_graph.filter_chain_txouts(&bdk_wallet.local_chain, tip_id, txo_index.outpoints());
+// pub fn coins_from_wallet(bdk_wallet: &BdkWallet) -> HashMap<OutPoint, Coin> {
+//     // Get an iterator over all the wallet txos (not only the currently unspent ones) by using
+//     // lower level methods.
+//     let tx_graph = bdk_wallet.graph.graph();
+//     let txo_index = &bdk_wallet.graph.index;
+//     let tip_id = bdk_wallet.local_chain.tip().block_id();
+//     let wallet_txos =
+//         tx_graph.filter_chain_txouts(&bdk_wallet.local_chain, tip_id, txo_index.outpoints());
 
-    let mut wallet_coins = Vec::new();
-    // Go through all the wallet txos and create a DB coin for each.
-    for ((k, i), full_txo) in wallet_txos {
-        let outpoint = full_txo.outpoint;
+//     let mut wallet_coins = Vec::new();
+//     // Go through all the wallet txos and create a DB coin for each.
+//     for ((k, i), full_txo) in wallet_txos {
+//         let outpoint = full_txo.outpoint;
 
-        let amount = full_txo.txout.value;
-        let derivation_index = i.into();
-        let is_change = matches!(k, KeychainType::Change);
-        let block_info = match full_txo.chain_position {
-            ChainPosition::Unconfirmed(_) => None,
-            ChainPosition::Confirmed(anchor) => Some(anchor),
-        };
+//         let amount = full_txo.txout.value;
+//         let derivation_index = i.into();
+//         let is_change = matches!(k, KeychainType::Change);
+//         let block_info = match full_txo.chain_position {
+//             ChainPosition::Unconfirmed(_) => None,
+//             ChainPosition::Confirmed(anchor) => Some(anchor),
+//         };
 
-        // Immature if from a coinbase transaction with less than a hundred confs.
-        let is_immature = full_txo.is_on_coinbase
-            && block_info
-                .and_then(|blk| {
-                    let tip_height: i32 = tip_id.height.try_into().expect("i32 by consensus");
-                    tip_height
-                        .checked_sub(blk.height)
-                        .map(|confs| confs < COINBASE_MATURITY as i32)
-                })
-                .unwrap_or(true);
+//         // Immature if from a coinbase transaction with less than a hundred confs.
+//         let is_immature = full_txo.is_on_coinbase
+//             && block_info
+//                 .and_then(|blk| {
+//                     let tip_height: i32 = tip_id.height.try_into().expect("i32 by consensus");
+//                     tip_height
+//                         .checked_sub(blk.height)
+//                         .map(|confs| confs < COINBASE_MATURITY as i32)
+//                 })
+//                 .unwrap_or(true);
 
-        // Get spend status of this coin.
-        let (mut spend_txid, mut spend_block) = (None, None);
-        if let Some((spend_pos, txid)) = full_txo.spent_by {
-            spend_txid = Some(txid);
-            spend_block = match spend_pos {
-                ChainPosition::Confirmed(anchor) => Some(anchor),
-                ChainPosition::Unconfirmed(_) => None,
-            };
-        }
+//         // Get spend status of this coin.
+//         let (mut spend_txid, mut spend_block) = (None, None);
+//         if let Some((spend_pos, txid)) = full_txo.spent_by {
+//             spend_txid = Some(txid);
+//             spend_block = match spend_pos {
+//                 ChainPosition::Confirmed(anchor) => Some(anchor),
+//                 ChainPosition::Unconfirmed(_) => None,
+//             };
+//         }
 
-        // Create the coin and if it doesn't exist or was modified, return it.
-        let coin = Coin {
-            outpoint,
-            amount,
-            derivation_index,
-            is_change,
-            is_immature,
-            block_info,
-            spend_txid,
-            spend_block,
-        };
-        wallet_coins.push(coin);
-    }
-    println!(
-        "coins from wallet: wallet coins length: {}",
-        wallet_coins.len()
-    );
-    wallet_coins
-}
+//         // Create the coin and if it doesn't exist or was modified, return it.
+//         let coin = Coin {
+//             outpoint,
+//             amount,
+//             derivation_index,
+//             is_change,
+//             is_immature,
+//             block_info,
+//             spend_txid,
+//             spend_block,
+//         };
+//         wallet_coins.push(coin);
+//     }
+//     println!(
+//         "coins from wallet: wallet coins length: {}",
+//         wallet_coins.len()
+//     );
+//     wallet_coins
+//     .into_iter()
+//             .map(|c| (c.outpoint, c))
+//             .collect()
+// }
 
 pub struct Electrum {
     /// Client for generalistic calls.
@@ -655,4 +802,85 @@ pub struct Electrum {
     pub bdk_wallet: BdkWallet,
 }
 
-impl Electrum {}
+impl Electrum {
+    // pub fn sync(&mut self) {
+    //     //let network = bdk_wallet.network;
+    // let chain_tip = self.bdk_wallet.local_chain.tip();
+    // println!(
+    //     "sync_through_bdk: local chain tip: {}",
+    //     chain_tip.block_id().height
+    // );
+
+    // //bdk_wallet.local_chain.disconnect_from(block_id)
+
+    // //let spks = bdk_wallet.graph.index.all_unbounded_spk_iters();
+    // let mut request =
+    //     SyncRequest::from_chain_tip(chain_tip.clone()).cache_graph_txs(self.bdk_wallet.graph.graph());
+
+    // let all_spks = self.bdk_wallet
+    //     .graph
+    //     .index
+    //     .revealed_spks(..)
+    //     .map(|(k, i, spk)| (k.to_owned(), i, spk.to_owned()))
+    //     .collect::<Vec<_>>();
+    // request = request.chain_spks(all_spks.into_iter().map(|(k, spk_i, spk)| {
+    //     eprint!("Scanning {:?}: {}", k, spk_i);
+    //     spk
+    // }));
+
+    // let total_spks = request.spks.len();
+    // println!("total_spks: {total_spks}");
+
+    // request = request.inspect_spks({
+    //     let mut visited = 0;
+    //     move |_| {
+    //         visited += 1;
+    //         eprintln!(
+    //             "inspect_spks [ {:>6.2}% ]",
+    //             (visited * 100) as f32 / total_spks as f32
+    //         )
+    //     }
+    // });
+
+    // let sync_result = self.client
+    //     .sync(request, 10, true)
+    //     .unwrap()
+    //     .with_confirmation_time_height_anchor(&self.client)
+    //     .unwrap();
+    // println!(
+    //     "sync_through_bdk: chain_update: {}",
+    //     sync_result.chain_update.height()
+    // );
+    // let _ = self.bdk_wallet
+    //     .local_chain
+    //     .apply_update(sync_result.chain_update)
+    //     .unwrap();
+
+    // let graph_update = sync_result.graph_update.map_anchors(|a| BlockInfo {
+    //     hash: a.anchor_block.hash,
+    //     time: a.confirmation_time.try_into().unwrap(),
+    //     height: a.confirmation_height.try_into().unwrap(),
+    // });
+    // let _ = self.bdk_wallet.graph.apply_update(graph_update);
+    // }
+}
+
+pub fn sanity_checks(
+    client: &ElectrumClient,
+    config_network: &bitcoin::Network,
+) -> Result<(), ElectrumError> {
+    let server_features = client
+        .server_features()
+        .map_err(|e| ElectrumError::Server(e))?;
+    log::debug!("{:?}", server_features);
+    let server_hash = {
+        let mut hash = server_features.genesis_hash;
+        hash.reverse();
+        BlockHash::from_byte_array(hash)
+    };
+    let expected_hash = expected_genesis_hash(config_network);
+    if server_hash != expected_hash {
+        return Err(ElectrumError::NetworkMismatch(expected_hash, server_hash));
+    }
+    Ok(())
+}

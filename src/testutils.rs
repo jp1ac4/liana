@@ -68,10 +68,6 @@ impl BitcoinInterface for DummyBitcoind {
         true
     }
 
-    fn sync(&mut self, _db_conn: &mut Box<dyn DatabaseConnection>) {
-        todo!()
-    }
-
     fn init(
         &mut self,
         _db_conn: &mut Box<dyn DatabaseConnection>,
@@ -82,7 +78,7 @@ impl BitcoinInterface for DummyBitcoind {
     }
 
     fn update_coins(
-        &self,
+        &mut self,
         _db_conn: &mut Box<dyn DatabaseConnection>,
         _previous_tip: &BlockChainTip,
         _descs: &[descriptors::SinglePathLianaDesc],

@@ -13,10 +13,8 @@ pub mod spend;
 #[cfg(test)]
 mod testutils;
 
-use bdk_chain::bitcoin::{hashes::Hash, BlockHash};
-use bdk_electrum::electrum_client::ElectrumApi;
 pub use bip39;
-use bitcoin::electrum::{BdkWallet, Electrum};
+use bitcoin::electrum::{sanity_checks, BdkWallet, Electrum, ElectrumError};
 pub use miniscript;
 
 pub use crate::bitcoin::d::{BitcoinD, BitcoindError, WalletError};
@@ -98,6 +96,7 @@ pub enum StartupError {
     MissingBitcoinBackendConfig,
     Database(SqliteDbError),
     Bitcoind(BitcoindError),
+    Electrum(ElectrumError),
     #[cfg(unix)]
     Daemonization(&'static str),
     #[cfg(windows)]
@@ -126,6 +125,7 @@ impl fmt::Display for StartupError {
             ),
             Self::Database(e) => write!(f, "Error initializing database: '{}'.", e),
             Self::Bitcoind(e) => write!(f, "Error setting up bitcoind interface: '{}'.", e),
+            Self::Electrum(e) => write!(f, "Error setting up Electrum interface: '{}'.", e),
             #[cfg(unix)]
             Self::Daemonization(e) => write!(f, "Error when daemonizing: '{}'.", e),
             #[cfg(windows)]
@@ -217,22 +217,23 @@ fn setup_electrum(config: &Config) -> Result<Electrum, StartupError> {
         _ => Err(StartupError::MissingBitcoindConfig)?, // TODO: fix error type
     };
     let client = bdk_electrum::electrum_client::Client::new(&electrum_config.addr.to_string())
-        .map_err(|_e| StartupError::MissingBitcoindConfig)?; // TODO: fix error type
-    let server_features = client
-        .server_features()
-        .map_err(|_e| StartupError::MissingBitcoindConfig)?;
-    log::debug!("{:?}", server_features);
-    let server_genesis_hash = {
-        let mut hash = server_features.genesis_hash;
-        hash.reverse();
-        BlockHash::from_byte_array(hash)
-    };
-    println!("server genesis hash {}", server_genesis_hash.to_string());
-    let expected_hash = bitcoin::expected_genesis_hash(&config.bitcoin_config.network);
-    println!("expected genesis hash {}", expected_hash.to_string());
-    assert_eq!(server_genesis_hash, expected_hash);
+        .map_err(|e| StartupError::Electrum(ElectrumError::Server(e)))?;
+    sanity_checks(&client, &config.bitcoin_config.network)
+        .map_err(|e| StartupError::Electrum(e))?;
 
-    let bdk_wallet = BdkWallet::new(config.bitcoin_config.network, server_genesis_hash);
+    let bdk_wallet = BdkWallet::new(
+        config.bitcoin_config.network,
+        config
+            .main_descriptor
+            .receive_descriptor()
+            .as_descriptor_public_key()
+            .clone(),
+        config
+            .main_descriptor
+            .change_descriptor()
+            .as_descriptor_public_key()
+            .clone(),
+    );
 
     let ele = Electrum { client, bdk_wallet };
     Ok(ele)
