@@ -14,7 +14,7 @@ use crate::{
 };
 pub use d::{MempoolEntry, SyncProgress};
 
-use std::{collections::HashSet, fmt, str::FromStr, sync};
+use std::{collections::HashSet, convert::TryInto, fmt, str::FromStr, sync};
 
 use miniscript::bitcoin::{self, address, secp256k1};
 
@@ -517,8 +517,10 @@ impl BitcoinInterface for electrum::Electrum {
         self.bdk_wallet.reveal_spks(db_conn);
 
         let pre_sync_coins = &self.bdk_wallet.coins();
+        log::debug!("pre sync coins: {:?}", pre_sync_coins);
         self.sync_wallet();
         let wallet_coins = &self.bdk_wallet.coins();
+        log::debug!("wallet coins: {:?}", wallet_coins);
 
         // All newly received coins.
         let mut received = Vec::new();
@@ -539,6 +541,8 @@ impl BitcoinInterface for electrum::Electrum {
                     // as otherwise there must have been a reorg and the DB would have been rolled back.
                     if pre_c.block_info.is_none() && w_c.block_info.is_some() {
                         let block = w_c.block_info.expect("already checked");
+                        // let height: i32 = block.height.try_into().unwrap();
+                        // let time: u32 = block.confirmation_time.try_into().unwrap();
                         confirmed.push((*w_op, block.height, block.time));
                     }
                     if pre_c.spend_txid != w_c.spend_txid {
@@ -554,6 +558,8 @@ impl BitcoinInterface for electrum::Electrum {
                     if pre_c.spend_block.is_none() && w_c.spend_block.is_some() {
                         let block = w_c.spend_block.expect("already checked");
                         let txid = w_c.spend_txid.expect("must be present if spend confirmed");
+                        // let height: i32 = block.confirmation_height.try_into().unwrap();
+                        // let time: u32 = block.confirmation_time.try_into().unwrap();
                         spent.push((*w_op, txid, block.height, block.time));
                     }
                 }
@@ -564,8 +570,10 @@ impl BitcoinInterface for electrum::Electrum {
                 if w_c.derivation_index > db_conn.change_index() {
                     db_conn.set_change_index(w_c.derivation_index, secp);
                 }
-                received.push(w_c.to_db_coin());
+                received.push(*w_c);
                 if let Some(block) = w_c.block_info {
+                    // let height: i32 = block.confirmation_height.try_into().unwrap();
+                    // let time: u32 = block.confirmation_time.try_into().unwrap();
                     confirmed.push((*w_op, block.height, block.time));
                 }
                 if let Some(txid) = w_c.spend_txid {
@@ -573,6 +581,8 @@ impl BitcoinInterface for electrum::Electrum {
                 }
                 if let Some(block) = w_c.spend_block {
                     let spend_txid = w_c.spend_txid.expect("must be present if spend confirmed");
+                    // let height: i32 = block.confirmation_height.try_into().unwrap();
+                    // let time: u32 = block.confirmation_time.try_into().unwrap();
                     spent.push((*w_op, spend_txid, block.height, block.time));
                 }
             }
@@ -635,9 +645,9 @@ impl BitcoinInterface for electrum::Electrum {
             .get_tx_node(*txid)
             .map(|tx_node| {
                 let block = tx_node.anchors.first().map(|info| Block {
-                    hash: info.hash,
-                    height: info.height,
-                    time: 0,
+                    hash: info.anchor_block.hash,
+                    height: info.confirmation_height.try_into().unwrap(),
+                    time: info.confirmation_time.try_into().unwrap(),
                 });
                 let tx = tx_node.tx.as_ref().clone();
                 (tx, block)
