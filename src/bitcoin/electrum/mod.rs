@@ -18,26 +18,14 @@ use bdk_electrum::{
     ElectrumExt,
 };
 
+mod utils;
 use crate::{
     bitcoin::{expected_genesis_hash, Block, BlockChainTip, COINBASE_MATURITY, LOOK_AHEAD_LIMIT},
     database::{BlockInfo, Coin, DatabaseConnection},
 };
-
-fn height_u32_from_i32(height: i32) -> u32 {
-    height.try_into().expect("height must fit into u32")
-}
-
-fn height_i32_from_u32(height: u32) -> i32 {
-    height.try_into().expect("height must fit into i32")
-}
-
-fn height_usize_from_i32(height: i32) -> usize {
-    height.try_into().expect("height must fit into usize")
-}
-
-fn height_usize_from_u32(height: u32) -> usize {
-    height.try_into().expect("height must fit into usize")
-}
+use utils::{
+    height_i32_from_u32, height_u32_from_i32, height_usize_from_i32, height_usize_from_u32,
+};
 
 fn block_id_from_tip(tip: BlockChainTip) -> BlockId {
     BlockId {
@@ -74,7 +62,7 @@ impl std::fmt::Display for ElectrumError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum KeychainType {
+enum KeychainType {
     Deposit,
     Change,
 }
@@ -108,9 +96,6 @@ impl BdkWallet {
             }
             block_id
         });
-        // If we stored hashes in the DB, we would not need to check the DB tip is still in the best chain.
-        // For simplicity, ignore existing coins if the DB tip is no longer in the best chain.
-        // Perhaps we could load some of the data, but Wwe certainly must not retrieve hashes for them.
         let existing_coins = db_conn.coins(&[], &[]);
         let existing_txs = list_transactions(db_conn);
         log::debug!("Number of txs loaded from DB: {}.", existing_txs.len());
@@ -242,7 +227,7 @@ impl BdkWallet {
                 ChainPosition::Unconfirmed(_) => None,
                 ChainPosition::Confirmed(anchor) => {
                     let block_info = BlockInfo {
-                        height: anchor.confirmation_height.try_into().unwrap(),
+                        height: height_i32_from_u32(anchor.confirmation_height),
                         time: anchor.confirmation_time.try_into().unwrap(),
                     };
                     Some(block_info)
@@ -268,7 +253,7 @@ impl BdkWallet {
                     ChainPosition::Unconfirmed(_) => None,
                     ChainPosition::Confirmed(anchor) => {
                         let block_info = BlockInfo {
-                            height: anchor.confirmation_height.try_into().unwrap(),
+                            height: height_i32_from_u32(anchor.confirmation_height),
                             time: anchor.confirmation_time.try_into().unwrap(),
                         };
                         Some(block_info)
