@@ -215,6 +215,10 @@ impl DatabaseConnection for DummyDatabase {
         self.db.write().unwrap().curr_tip = Some(*tip);
     }
 
+    fn main_descriptor(&mut self) -> descriptors::LianaDescriptor {
+        todo!()
+    }
+
     fn receive_index(&mut self) -> bip32::ChildNumber {
         self.db.read().unwrap().deposit_index
     }

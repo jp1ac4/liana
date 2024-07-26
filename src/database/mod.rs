@@ -10,6 +10,7 @@ use crate::{
         schema::{DbBlockInfo, DbCoin, DbTip},
         SqliteConn, SqliteDb,
     },
+    descriptors::LianaDescriptor,
 };
 
 use std::{
@@ -51,6 +52,9 @@ pub trait DatabaseConnection {
 
     /// Update our best chain seen.
     fn update_tip(&mut self, tip: &BlockChainTip);
+
+    /// Get the main descriptor
+    fn main_descriptor(&mut self) -> LianaDescriptor;
 
     /// Get the derivation index for the next receiving address
     fn receive_index(&mut self) -> bip32::ChildNumber;
@@ -185,6 +189,10 @@ impl DatabaseConnection for SqliteConn {
 
     fn update_tip(&mut self, tip: &BlockChainTip) {
         self.update_tip(tip)
+    }
+
+    fn main_descriptor(&mut self) -> LianaDescriptor {
+        self.db_wallet().main_descriptor
     }
 
     fn receive_index(&mut self) -> bip32::ChildNumber {
