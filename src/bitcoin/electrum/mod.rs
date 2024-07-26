@@ -55,7 +55,7 @@ pub enum ElectrumError {
         BlockHash, /*expected hash*/
         BlockHash, /*actual hash*/
     ),
-    BdkWallet,
+    BdkWallet(String),
 }
 
 impl std::fmt::Display for ElectrumError {
@@ -69,7 +69,7 @@ impl std::fmt::Display for ElectrumError {
                     expected_hash, actual_hash
                 )
             }
-            ElectrumError::BdkWallet => write!(f, "BDK wallet error."),
+            ElectrumError::BdkWallet(e) => write!(f, "BDK wallet error: '{}'.", e),
         }
     }
 }
@@ -150,17 +150,17 @@ impl BdkWallet {
             // Insert DB tip into local chain to ensure the tips match, even if the DB tip is no longer
             // in the best chain.
             if t.height > 0 {
-                let block_id = block_id_from_tip(t.clone());
+                let block_id = block_id_from_tip(*t);
                 let _ = local_chain
                     .insert_block(block_id)
                     .expect("only contains genesis block");
             }
-            client.is_in_chain(&t)
+            client.is_in_chain(t)
         }) {
             log::debug!("Db tip: {db_tip}");
             // Make sure the DB tip remains in the best chain while we load coins to ensure the hashes are valid.
             // If not, restart this method.
-            let coins = list_coins(db_conn, &client)?;
+            let coins = list_coins(db_conn, client)?;
             log::debug!("Number of coins loaded from DB: {}.", coins.len());
             if !client.is_in_chain(&db_tip) {
                 log::warn!(
@@ -237,7 +237,10 @@ impl BdkWallet {
         let mut graph = TxGraph::default();
         graph.apply_changeset(graph_cs);
         let _ = bdk_wallet.graph.apply_update(graph);
-        let _ = bdk_wallet.local_chain.apply_changeset(&chain_cs).unwrap();
+        bdk_wallet
+            .local_chain
+            .apply_changeset(&chain_cs)
+            .map_err(|e| ElectrumError::BdkWallet(e.to_string()))?;
         Ok(bdk_wallet)
     }
 
@@ -306,7 +309,7 @@ impl BdkWallet {
                         let tip_height: i32 = height_i32_from_u32(tip_id.height);
                         tip_height
                             .checked_sub(blk.height)
-                            .map(|confs| confs < COINBASE_MATURITY as i32)
+                            .map(|confs| confs < COINBASE_MATURITY)
                     })
                     .unwrap_or(true);
 
@@ -415,6 +418,28 @@ pub struct Coin {
     pub spend_block: Option<BlockInfo>,
 }
 
+impl Coin {
+    /// Convert to a regular `Coin` (i.e. one without block hashes).
+    pub fn to_db_coin(&self) -> database::Coin {
+        database::Coin {
+            outpoint: self.outpoint,
+            is_immature: self.is_immature,
+            block_info: self.block_info.map(|info| database::BlockInfo {
+                height: info.height,
+                time: info.time,
+            }),
+            amount: self.amount,
+            derivation_index: self.derivation_index,
+            is_change: self.is_change,
+            spend_txid: self.spend_txid,
+            spend_block: self.spend_block.map(|info| database::BlockInfo {
+                height: info.height,
+                time: info.time,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Transaction {
     pub txid: bitcoin::Txid,
@@ -456,7 +481,7 @@ fn list_coins(
                         let hash = client
                             .0
                             .block_header(info.height.try_into().expect("height must fit in usize"))
-                            .map_err(|e| ElectrumError::Server(e))?
+                            .map_err(ElectrumError::Server)?
                             .block_hash();
                         *v.insert(hash)
                     }
@@ -615,18 +640,15 @@ pub struct ElectrumClient(Client);
 impl ElectrumClient {
     /// Create a new client and perform sanity checks.
     pub fn new(url: &str, network: &bitcoin::Network) -> Result<Self, ElectrumError> {
-        let client = bdk_electrum::electrum_client::Client::new(url)
-            .map_err(|e| ElectrumError::Server(e))?;
+        let client =
+            bdk_electrum::electrum_client::Client::new(url).map_err(ElectrumError::Server)?;
         let ele_client = Self(client);
         ele_client.sanity_checks(network)?;
         Ok(ele_client)
     }
 
     fn sanity_checks(&self, network: &bitcoin::Network) -> Result<(), ElectrumError> {
-        let server_features = self
-            .0
-            .server_features()
-            .map_err(|e| ElectrumError::Server(e))?;
+        let server_features = self.0.server_features().map_err(ElectrumError::Server)?;
         log::debug!("{:?}", server_features);
         let server_hash = {
             let mut hash = server_features.genesis_hash;

@@ -8,7 +8,7 @@ pub mod poller;
 
 use crate::{
     bitcoin::d::BitcoindError,
-    database::{BlockInfo, Coin, DatabaseConnection},
+    database::{Coin, DatabaseConnection},
     descriptors,
     poller::looper::UpdatedCoins,
 };
@@ -539,14 +539,14 @@ impl BitcoinInterface for electrum::Electrum {
                     // as otherwise there must have been a reorg and the DB would have been rolled back.
                     if pre_c.block_info.is_none() && w_c.block_info.is_some() {
                         let block = w_c.block_info.expect("already checked");
-                        confirmed.push((w_op.clone(), block.height, block.time));
+                        confirmed.push((*w_op, block.height, block.time));
                     }
                     if pre_c.spend_txid != w_c.spend_txid {
                         if pre_c.spend_txid.is_some() {
-                            expired_spending.push(w_op.clone());
+                            expired_spending.push(*w_op);
                         }
                         if let Some(txid) = w_c.spend_txid {
-                            spending.push((w_op.clone(), txid));
+                            spending.push((*w_op, txid));
                         }
                     }
                     // If `pre_c.spend_block.is_some()`, then we can assume the value hasn't changed
@@ -554,7 +554,7 @@ impl BitcoinInterface for electrum::Electrum {
                     if pre_c.spend_block.is_none() && w_c.spend_block.is_some() {
                         let block = w_c.spend_block.expect("already checked");
                         let txid = w_c.spend_txid.expect("must be present if spend confirmed");
-                        spent.push((w_op.clone(), txid, block.height, block.time));
+                        spent.push((*w_op, txid, block.height, block.time));
                     }
                 }
             } else {
@@ -564,33 +564,16 @@ impl BitcoinInterface for electrum::Electrum {
                 if w_c.derivation_index > db_conn.change_index() {
                     db_conn.set_change_index(w_c.derivation_index, secp);
                 }
-                // TODO: add method to convert from one to the other.
-                let coin = Coin {
-                    outpoint: w_c.outpoint,
-                    is_immature: w_c.is_immature,
-                    block_info: w_c.block_info.map(|info| BlockInfo {
-                        height: info.height,
-                        time: info.time,
-                    }),
-                    amount: w_c.amount,
-                    derivation_index: w_c.derivation_index,
-                    is_change: w_c.is_change,
-                    spend_txid: w_c.spend_txid,
-                    spend_block: w_c.spend_block.map(|info| BlockInfo {
-                        height: info.height,
-                        time: info.time,
-                    }),
-                };
-                received.push(coin);
+                received.push(w_c.to_db_coin());
                 if let Some(block) = w_c.block_info {
-                    confirmed.push((w_op.clone(), block.height, block.time));
+                    confirmed.push((*w_op, block.height, block.time));
                 }
                 if let Some(txid) = w_c.spend_txid {
-                    spending.push((w_op.clone(), txid));
+                    spending.push((*w_op, txid));
                 }
                 if let Some(block) = w_c.spend_block {
                     let spend_txid = w_c.spend_txid.expect("must be present if spend confirmed");
-                    spent.push((w_op.clone(), spend_txid, block.height, block.time));
+                    spent.push((*w_op, spend_txid, block.height, block.time));
                 }
             }
         }

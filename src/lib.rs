@@ -229,7 +229,7 @@ fn setup_electrum(
     };
     let mut db_conn = db.connection();
     let electrum = Electrum::from_db(&mut db_conn, &electrum_config.addr.to_string())
-        .map_err(|e| StartupError::Electrum(e))?;
+        .map_err(StartupError::Electrum)?;
     Ok(electrum)
 }
 
