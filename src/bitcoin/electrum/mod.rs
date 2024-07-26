@@ -144,13 +144,12 @@ impl BdkWallet {
 
         // Update the existing coins and transactions information using a TxGraph changeset.
         let mut graph_cs = tx_graph::ChangeSet::default();
-        //let mut chain_cs = local_chain::ChangeSet::default();
         for tx in existing_txs {
             graph_cs.txs.insert(Arc::new(tx.tx));
         }
         for coin in existing_coins.values() {
             // First of all insert the txout itself.
-            let script_pubkey = bdk_wallet.spk(coin.derivation_index, coin.is_change);
+            let script_pubkey = bdk_wallet.get_spk(coin.derivation_index, coin.is_change);
             let txout = TxOut {
                 script_pubkey,
                 value: coin.amount,
@@ -204,7 +203,7 @@ impl BdkWallet {
         println!("revealed keychains: {:?}", a.0.keys());
     }
 
-    fn spk(&self, der_index: bip32::ChildNumber, is_change: bool) -> ScriptBuf {
+    fn get_spk(&self, der_index: bip32::ChildNumber, is_change: bool) -> ScriptBuf {
         // Try to get it from the BDK wallet cache first, failing that derive it from the appropriate
         // descriptor.
         let chain_kind = if is_change {
