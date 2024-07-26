@@ -1,7 +1,6 @@
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap},
     convert::TryInto,
-    str::FromStr,
     sync::Arc,
 };
 
@@ -10,11 +9,11 @@ use bdk_electrum::{
     bdk_chain::{
         bitcoin::{self, bip32, hashes::Hash, BlockHash, ScriptBuf, TxOut},
         keychain::KeychainTxOutIndex,
-        local_chain::{self, LocalChain},
+        local_chain::{self, CheckPoint, LocalChain},
         miniscript::{Descriptor, DescriptorPublicKey},
         spk_client::SyncRequest,
         tx_graph::{self, TxGraph},
-        Anchor, BlockId, ChainPosition, ConfirmationTimeHeightAnchor, IndexedTxGraph,
+        Anchor, BlockId, ChainOracle, ChainPosition, ConfirmationTimeHeightAnchor, IndexedTxGraph,
     },
     electrum_client::{Client, ElectrumApi, HeaderNotification},
     ElectrumExt,
@@ -22,30 +21,55 @@ use bdk_electrum::{
 
 use crate::{
     bitcoin::{expected_genesis_hash, BlockChainTip, COINBASE_MATURITY, LOOK_AHEAD_LIMIT},
-    database::DatabaseConnection,
+    database::{self, DatabaseConnection},
 };
+
+fn height_u32_from_i32(height: i32) -> u32 {
+    height.try_into().expect("height must fit into u32")
+}
+
+fn height_i32_from_u32(height: u32) -> i32 {
+    height.try_into().expect("height must fit into i32")
+}
+
+fn height_usize_from_i32(height: i32) -> usize {
+    height.try_into().expect("height must fit into usize")
+}
+
+fn height_usize_from_u32(height: u32) -> usize {
+    height.try_into().expect("height must fit into usize")
+}
+
+fn block_id_from_tip(tip: BlockChainTip) -> BlockId {
+    BlockId {
+        height: height_u32_from_i32(tip.height),
+        hash: tip.hash,
+    }
+}
 
 /// An error in the Electrum interface.
 #[derive(Debug)]
 pub enum ElectrumError {
     Server(bdk_electrum::electrum_client::Error),
-    NetworkMismatch(
+    GenesisHashMismatch(
         BlockHash, /*expected hash*/
         BlockHash, /*actual hash*/
     ),
+    BdkWallet,
 }
 
 impl std::fmt::Display for ElectrumError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            ElectrumError::Server(e) => write!(f, "Electrum error: {}", e),
-            ElectrumError::NetworkMismatch(expected_hash, actual_hash) => {
+            ElectrumError::Server(e) => write!(f, "Electrum error: '{}'.", e),
+            ElectrumError::GenesisHashMismatch(expected_hash, actual_hash) => {
                 write!(
                     f,
-                    "Network mismatch. The genesis hash is expected to be '{}' but was found to be '{}'.",
+                    "Genesis hash mismatch. The genesis hash is expected to be '{}' but was found to be '{}'.",
                     expected_hash, actual_hash
                 )
             }
+            ElectrumError::BdkWallet => write!(f, "BDK wallet error."),
         }
     }
 }
@@ -55,8 +79,6 @@ pub enum KeychainType {
     Deposit,
     Change,
 }
-
-// pub const ALL_KEYCHAINS: [KeychainType; 2] = [KeychainType::Deposit, KeychainType::Change];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockInfo {
@@ -68,26 +90,23 @@ pub struct BlockInfo {
 impl Anchor for BlockInfo {
     fn anchor_block(&self) -> BlockId {
         BlockId {
-            height: self.height.try_into().expect("height must fit into u32"),
+            height: height_u32_from_i32(self.height),
             hash: self.hash,
         }
     }
 
     fn confirmation_height_upper_bound(&self) -> u32 {
-        self.height.try_into().expect("height must fit into u32")
+        height_u32_from_i32(self.height)
     }
 }
 
 impl From<ConfirmationTimeHeightAnchor> for BlockInfo {
     fn from(anchor: ConfirmationTimeHeightAnchor) -> Self {
-        assert_eq!(
-            anchor.confirmation_height, anchor.anchor_block.height,
-            "TODO: enter message"
-        );
+        assert_eq!(anchor.confirmation_height, anchor.anchor_block.height,);
         let time = anchor.confirmation_time;
         let anchor = anchor.anchor_block;
         Self {
-            height: anchor.height.try_into().expect("height must fit into i32"),
+            height: height_i32_from_u32(anchor.height),
             time: time.try_into().expect("time must fit into u32"),
             hash: anchor.hash,
         }
@@ -97,21 +116,143 @@ impl From<ConfirmationTimeHeightAnchor> for BlockInfo {
 pub struct BdkWallet {
     pub graph: IndexedTxGraph<BlockInfo, KeychainTxOutIndex<KeychainType>>,
     pub local_chain: LocalChain,
+    // Store descriptors for use when getting SPKs.
     receive_desc: Descriptor<DescriptorPublicKey>,
     change_desc: Descriptor<DescriptorPublicKey>,
 }
 
 impl BdkWallet {
-    pub fn reveal(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {
+    /// Create a new BDK wallet using existing data from the database.
+    ///
+    /// It retrieves deposit and spend block hashes of coins from Electrum,
+    /// as long as the DB chain tip is still in the best chain. Otherwise,
+    /// it skips loading existing coins.
+    ///
+    /// `client` is only needed to get block hashes and would not be required
+    /// if these were stored in the DB.
+    fn from_db(
+        db_conn: &mut Box<dyn DatabaseConnection>,
+        client: &ElectrumClient, // Only needed to get block hashes.
+    ) -> Result<Self, ElectrumError> {
+        let main_descriptor = db_conn.main_descriptor();
+        println!("setting up BDK wallet from DB");
+        let genesis_hash = client.genesis_block().hash;
+        println!("bdk_wallet_from_db: genesis_hash: {genesis_hash}");
+
+        // Poller may not have run yet so this could be NULL.
+        let db_tip = db_conn.chain_tip();
+
+        let mut local_chain = LocalChain::from_genesis_hash(genesis_hash).0;
+        // If we stored hashes in the DB, we would not need to check the DB tip is still in the best chain.
+        // For simplicity, ignore existing coins if the DB tip is no longer in the best chain.
+        // Perhaps we could load some of the data, but Wwe certainly must not retrieve hashes for them.
+        let existing_coins = if let Some(db_tip) = db_tip.filter(|t| {
+            // Insert DB tip into local chain to ensure the tips match, even if the DB tip is no longer
+            // in the best chain.
+            if t.height > 0 {
+                let block_id = block_id_from_tip(t.clone());
+                let _ = local_chain
+                    .insert_block(block_id)
+                    .expect("only contains genesis block");
+            }
+            client.is_in_chain(&t)
+        }) {
+            log::debug!("Db tip: {db_tip}");
+            // Make sure the DB tip remains in the best chain while we load coins to ensure the hashes are valid.
+            // If not, restart this method.
+            let coins = list_coins(db_conn, &client)?;
+            log::debug!("Number of coins loaded from DB: {}.", coins.len());
+            if !client.is_in_chain(&db_tip) {
+                log::warn!(
+                    "DB tip is no longer in chain. Restarting creation of BDK wallet from DB."
+                );
+                return BdkWallet::from_db(db_conn, client);
+            }
+            log::debug!("DB tip is still in DB. Hashes are valid.");
+            coins
+        } else {
+            // Don't bother trying to find common ancestor. Get all coins from Electrum.
+            Vec::new()
+        };
+        let existing_txs = list_transactions(db_conn);
+        log::debug!("Number of txs loaded from DB: {}.", existing_txs.len());
+
+        let receive_desc = main_descriptor
+            .receive_descriptor()
+            .as_descriptor_public_key();
+
+        let change_desc = main_descriptor
+            .change_descriptor()
+            .as_descriptor_public_key();
+
+        let mut bdk_wallet = BdkWallet {
+            graph: {
+                let mut indexer = KeychainTxOutIndex::<KeychainType>::new(LOOK_AHEAD_LIMIT);
+                let _ = indexer.insert_descriptor(KeychainType::Deposit, receive_desc.clone());
+                let _ = indexer.insert_descriptor(KeychainType::Change, change_desc.clone());
+                IndexedTxGraph::new(indexer)
+            },
+            local_chain,
+            receive_desc: receive_desc.clone(),
+            change_desc: change_desc.clone(),
+        };
+        // Update the last used derivation index for both change and receive addresses.
+        // It should be fine to do this even if DB tip is no longer in best chain.
+        bdk_wallet.reveal_spks(db_conn);
+
+        // Update the existing coins and transactions information using a TxGraph changeset.
+        let mut graph_cs = tx_graph::ChangeSet::default();
+        let mut chain_cs = local_chain::ChangeSet::default();
+        for tx in existing_txs {
+            graph_cs.txs.insert(Arc::new(tx.tx));
+        }
+        for coin in existing_coins {
+            // First of all insert the txout itself.
+            let script_pubkey = bdk_wallet.spk(coin.derivation_index, coin.is_change);
+            let txout = TxOut {
+                script_pubkey,
+                value: coin.amount,
+            };
+            graph_cs.txouts.insert(coin.outpoint, txout);
+            // If the coin's deposit transaction is confirmed, tell BDK by inserting an anchor.
+            // Otherwise, we could insert a last seen timestamp but we don't have such data stored in
+            // the table.
+            if let Some(block_info) = coin.block_info {
+                graph_cs.anchors.insert((block_info, coin.outpoint.txid));
+                chain_cs.insert(
+                    height_u32_from_i32(block_info.height),
+                    Some(block_info.hash),
+                );
+            }
+            // If the coin's spending transaction is confirmed, do the same.
+            if let Some(spend_block_info) = coin.spend_block {
+                let spend_txid = coin.spend_txid.expect("Must be present if confirmed.");
+                graph_cs.anchors.insert((spend_block_info, spend_txid));
+                chain_cs.insert(
+                    height_u32_from_i32(spend_block_info.height),
+                    Some(spend_block_info.hash),
+                );
+            }
+        }
+        let mut graph = TxGraph::default();
+        graph.apply_changeset(graph_cs);
+        let _ = bdk_wallet.graph.apply_update(graph);
+        let _ = bdk_wallet.local_chain.apply_changeset(&chain_cs).unwrap();
+        Ok(bdk_wallet)
+    }
+
+    /// Reveal SPKs based on derivation indices set in DB.
+    pub fn reveal_spks(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {
         let mut last_active_indices = BTreeMap::new();
         let receive_index: u32 = db_conn.receive_index().into();
-        last_active_indices.insert(KeychainType::Deposit, receive_index.saturating_sub(0));
+        last_active_indices.insert(KeychainType::Deposit, receive_index.saturating_add(0));
         let change_index: u32 = db_conn.change_index().into();
-        last_active_indices.insert(KeychainType::Change, change_index.saturating_sub(0));
-        let _ = self
+        last_active_indices.insert(KeychainType::Change, change_index.saturating_add(0));
+        let a = self
             .graph
             .index
             .reveal_to_target_multi(&last_active_indices);
+        println!("revealed keychains: {:?}", a.0.keys());
     }
 
     fn spk(&self, der_index: bip32::ChildNumber, is_change: bool) -> ScriptBuf {
@@ -136,6 +277,7 @@ impl BdkWallet {
         }
     }
 
+    /// Get the coins currently stored by the `BdkWallet`.
     pub fn coins(&self) -> HashMap<OutPoint, Coin> {
         // Get an iterator over all the wallet txos (not only the currently unspent ones) by using
         // lower level methods.
@@ -145,7 +287,7 @@ impl BdkWallet {
         let wallet_txos =
             tx_graph.filter_chain_txouts(&self.local_chain, tip_id, txo_index.outpoints());
         let mut wallet_coins = Vec::new();
-        // Go through all the wallet txos and create a DB coin for each.
+        // Go through all the wallet txos and create a coin for each.
         for ((k, i), full_txo) in wallet_txos {
             let outpoint = full_txo.outpoint;
 
@@ -161,7 +303,7 @@ impl BdkWallet {
             let is_immature = full_txo.is_on_coinbase
                 && block_info
                     .and_then(|blk| {
-                        let tip_height: i32 = tip_id.height.try_into().expect("i32 by consensus");
+                        let tip_height: i32 = height_i32_from_u32(tip_id.height);
                         tip_height
                             .checked_sub(blk.height)
                             .map(|confs| confs < COINBASE_MATURITY as i32)
@@ -198,12 +340,26 @@ impl BdkWallet {
         wallet_coins.into_iter().map(|c| (c.outpoint, c)).collect()
     }
 
-    pub fn sync_through_electrum(&mut self, client: &ElectrumClient) {
+    /// Get the (local) chain tip.
+    pub fn chain_tip(&self) -> BlockChainTip {
+        self.local_chain
+            .get_chain_tip()
+            .map(|t| BlockChainTip {
+                hash: t.hash,
+                height: height_i32_from_u32(t.height),
+            })
+            .expect("must contain at least genesis")
+    }
+
+    /// Sync the wallet using Electrum.
+    fn sync_using_electrum(&mut self, client: &ElectrumClient) {
         let chain_tip = self.local_chain.tip();
         println!(
             "sync_through_electrum: local chain tip: {}",
             chain_tip.block_id().height
         );
+
+        // TODO: if tip height is 0, perform full scan?
 
         let mut request =
             SyncRequest::from_chain_tip(chain_tip.clone()).cache_graph_txs(self.graph.graph());
@@ -211,43 +367,16 @@ impl BdkWallet {
         let all_spks: Vec<_> = self
             .graph
             .index
-            .inner()
-            //.all_unbounded_spk_iters()
-            //.revealed_spks()
-            .all_spks()
-            .iter()
-            .map(|a| a.1.to_owned())
-            .collect();
-        //.all_unbounded_spk_iters()
-        //.revealed_spks(..)
-        //.map(|(spk)| spk.to_owned())
-        //.collect::<Vec<_>>();
-        //let all_spks = all_spks.iter().map(|((k, i), spk)| spk.to_owned());
-        //request = request.chain_spks(all_spks);//
-        request = request.chain_spks(all_spks.into_iter().map(|s| {
-            eprint!("Scanning {}", s);
-            s.to_owned()
+            .revealed_spks(..)
+            .map(|(k, i, spk)| (k.to_owned(), i, spk.to_owned()))
+            .collect::<Vec<_>>();
+        request = request.chain_spks(all_spks.into_iter().map(|(k, spk_i, spk)| {
+            eprint!("Scanning {:?}: {}", k, spk_i);
+            spk
         }));
 
-        // .into_iter().map(|(k, spk_i, spk)| {
-        //     eprint!("Scanning {:?}: {}", k, spk_i);
-        //     spk
-        // }));
-        //self.graph.index.inner().all_spks() keychain_outpoints(keychain)
-
         let total_spks = request.spks.len();
-        println!("total_spks: {total_spks}");
-
-        request = request.inspect_spks({
-            let mut visited = 0;
-            move |_| {
-                visited += 1;
-                eprintln!(
-                    "inspect_spks [ {:>6.2}% ]",
-                    (visited * 100) as f32 / total_spks as f32
-                )
-            }
-        });
+        log::debug!("total_spks: {total_spks}");
 
         let sync_result = client
             .0
@@ -255,7 +384,7 @@ impl BdkWallet {
             .unwrap()
             .with_confirmation_time_height_anchor(&client.0)
             .unwrap();
-        println!(
+        log::debug!(
             "sync_through_electrum: chain_update: {}",
             sync_result.chain_update.height()
         );
@@ -308,199 +437,192 @@ fn list_transactions(db_conn: &mut Box<dyn DatabaseConnection>) -> Vec<Transacti
         .collect()
 }
 
-fn list_coins(db_conn: &mut Box<dyn DatabaseConnection>, client: &impl ElectrumApi) -> Vec<Coin> {
-    let coins = db_conn.coins(&[], &[]);
+/// Get DB coins together with corresponding deposit and spend block hashes.
+/// Caller should ensure afterwards that the DB tip is still in the best chain.
+fn list_coins(
+    db_conn: &mut Box<dyn DatabaseConnection>,
+    client: &ElectrumClient,
+) -> Result<Vec<Coin>, ElectrumError> {
+    let db_coins = db_conn.coins(&[], &[]);
     let mut hashes = HashMap::<i32, BlockHash>::new();
-    coins
-        .values()
-        .map(|c| {
-            let block_info = c.block_info.map(|info| {
+    // This closure constructs the `BlockInfo` by retrieving the block hash from `hashes` or otherwise
+    // from Electrum add then adding it to `hashes`.
+    let mut get_block_info =
+        |db_block_info: Option<database::BlockInfo>| -> Result<Option<BlockInfo>, ElectrumError> {
+            let block_info = if let Some(info) = db_block_info {
                 let hash = match hashes.entry(info.height) {
                     Entry::Occupied(o) => *o.get(),
                     Entry::Vacant(v) => {
                         let hash = client
-                            .block_header(info.height.try_into().unwrap())
-                            .unwrap()
+                            .0
+                            .block_header(info.height.try_into().expect("height must fit in usize"))
+                            .map_err(|e| ElectrumError::Server(e))?
                             .block_hash();
                         *v.insert(hash)
                     }
                 };
-                BlockInfo {
+                Some(BlockInfo {
                     height: info.height,
                     time: info.time,
                     hash,
-                }
-            });
-            let spend_block = c.spend_block.map(|info| {
-                let hash = match hashes.entry(info.height) {
-                    Entry::Occupied(o) => *o.get(),
-                    Entry::Vacant(v) => {
-                        let hash = client
-                            .block_header(info.height.try_into().unwrap())
-                            .unwrap()
-                            .block_hash();
-                        *v.insert(hash)
-                    }
-                };
-                BlockInfo {
-                    height: info.height,
-                    time: info.time,
-                    hash: hash,
-                }
-            });
-            Coin {
-                outpoint: bitcoin::OutPoint::from_str(&format!(
-                    "{}:{}",
-                    c.outpoint.txid, c.outpoint.vout
-                ))
-                .unwrap(), // TODO: change once versions match
-                block_info,
-                spend_block,
-                amount: bitcoin::Amount::from_sat(c.amount.to_sat()), // TODO: change once versions match
-                is_change: c.is_change,
-                derivation_index: bitcoin::bip32::ChildNumber::from_normal_idx(
-                    c.derivation_index.into(),
-                )
-                .unwrap(), // TODO: change once versions match
-                is_immature: c.is_immature,
-                spend_txid: c
-                    .spend_txid
-                    .map(|txid| bitcoin::Txid::from_str(&format!("{}", txid)).unwrap()), // TODO: change once versions match
-            }
-        })
-        .collect()
-}
-
-// Apply existing data from the database to the BDK wallet.
-// This assumes all block info in the DB is valid for the current tip so we
-// can use the block hashes fetched from client.
-pub fn bdk_wallet_from_db(
-    db_conn: &mut Box<dyn DatabaseConnection>,
-    client: &ElectrumClient,
-    //descs: &[descriptors::SinglePathLianaDesc],
-    receive_desc: Descriptor<DescriptorPublicKey>,
-    change_desc: Descriptor<DescriptorPublicKey>,
-) -> Result<BdkWallet, Box<dyn std::error::Error>> {
-    println!("setting up BDK wallet from DB");
-
-    let db_tip = db_conn.chain_tip().expect("msg");
-    println!("db_tip is {}", db_tip);
-
-    let genesis_hash = client.genesis_block().hash;
-    println!("local_chain_from_db: genesis_hash: {genesis_hash}");
-    let mut local_chain = LocalChain::from_genesis_hash(genesis_hash).0;
-
-    let existing_coins = if client.is_in_chain(&db_tip) {
-        let pre_coins_tip = client.chain_tip();
-        let db_coins = list_coins(db_conn, &client.0);
-        println!("num retrieved DB coins: {}", db_coins.len());
-        if !client.is_in_chain(&pre_coins_tip) {
-            println!("WARNING pre coins tip is no longer in chain");
-            return bdk_wallet_from_db(db_conn, client, receive_desc, change_desc);
-        }
-        println!("pre coins tip is still in chain");
-        if db_tip.height > 0 {
-            let db_tip_block = BlockId {
-                height: db_tip.height.try_into().expect("TODO"),
-                hash: db_tip.hash,
+                })
+            } else {
+                None
             };
-            let _ = local_chain.insert_block(db_tip_block).expect("not genesis");
-        }
-        db_coins
-    } else {
-        // Don't bother trying to find common ancestor. Get all coins from Electrum.
-        Vec::new()
-    };
-    let existing_txs = list_transactions(db_conn);
-
-    let mut bdk_wallet = BdkWallet {
-        graph: {
-            let mut indexer = KeychainTxOutIndex::<KeychainType>::new(LOOK_AHEAD_LIMIT);
-            let _ = indexer.insert_descriptor(KeychainType::Deposit, receive_desc.clone());
-            let _ = indexer.insert_descriptor(KeychainType::Change, change_desc.clone());
-            IndexedTxGraph::new(indexer)
-        },
-        local_chain,
-        receive_desc,
-        change_desc,
-    };
-    // Update the last used derivation index for both change and receive addresses. Note we store
-    // in DB the next derivation to be used for each, hence the -1 here.
-    bdk_wallet.reveal(db_conn);
-
-    // Update the existing coins and transactions information using a TxGraph changeset.
-    let mut graph_cs = tx_graph::ChangeSet::default();
-    let mut chain_cs = local_chain::ChangeSet::default();
-    for tx in existing_txs {
-        graph_cs.txs.insert(Arc::new(tx.tx));
-    }
-    for coin in existing_coins {
-        // First of all insert the txout itself.
-        let script_pubkey = bdk_wallet.spk(coin.derivation_index, coin.is_change);
-        let txout = TxOut {
-            script_pubkey,
-            value: coin.amount,
+            Ok(block_info)
         };
-        graph_cs.txouts.insert(coin.outpoint, txout);
-        // If the coin's deposit transaction is confirmed, tell BDK by inserting an anchor.
-        // Otherwise, we could insert a last seen timestamp but we don't have such data stored in
-        // the table.
-        if let Some(block_info) = coin.block_info {
-            graph_cs.anchors.insert((block_info, coin.outpoint.txid));
-            chain_cs.insert(block_info.height.try_into().unwrap(), Some(block_info.hash));
-        }
-        // If the coin's spending transaction is confirmed, do the same.
-        if let Some(spend_block_info) = coin.spend_block {
-            let spend_txid = coin.spend_txid.expect("Must be present if confirmed.");
-            graph_cs.anchors.insert((spend_block_info, spend_txid));
-            chain_cs.insert(
-                spend_block_info.height.try_into().unwrap(),
-                Some(spend_block_info.hash),
-            );
-        }
+    // For each DB coin, get the corresponding `BlockInfo`s.
+    let mut coins = Vec::new();
+    for c in db_coins.values() {
+        let block_info = get_block_info(c.block_info)?;
+        let spend_block = get_block_info(c.spend_block)?;
+        let coin = Coin {
+            outpoint: c.outpoint,
+            block_info,
+            spend_block,
+            amount: c.amount,
+            is_change: c.is_change,
+            derivation_index: c.derivation_index,
+            is_immature: c.is_immature,
+            spend_txid: c.spend_txid,
+        };
+        coins.push(coin);
     }
-    let mut graph = TxGraph::default();
-    graph.apply_changeset(graph_cs);
-    let _ = bdk_wallet.graph.apply_update(graph);
-    let _ = bdk_wallet.local_chain.apply_changeset(&chain_cs);
-    println!("finished setting up BDK wallet from DB");
-    println!(
-        "last used indices: {:?}",
-        bdk_wallet.graph.index.last_used_indices()
-    );
-    println!(
-        "last revealed indices: {:?}",
-        bdk_wallet.graph.index.last_revealed_indices()
-    );
-    Ok(bdk_wallet)
+    Ok(coins)
 }
 
+/// Interface for Electrum backend.
 pub struct Electrum {
-    /// Client for generalistic calls.
-    pub client: ElectrumClient, // TODO: remove pub
+    client: ElectrumClient,
     pub bdk_wallet: BdkWallet,
 }
 
 impl Electrum {
-    pub fn client(&self) -> &Client {
-        &self.client.0
+    pub fn from_db(
+        db_conn: &mut Box<dyn DatabaseConnection>,
+        url: &str,
+    ) -> Result<Self, ElectrumError> {
+        let network = db_conn.network();
+        let client = ElectrumClient::new(url, &network)?;
+        let bdk_wallet = BdkWallet::from_db(db_conn, &client)?;
+        Ok(Self { client, bdk_wallet })
+    }
+
+    // pub fn sanity_checks(&self, config_network: &bitcoin::Network) -> Result<(), ElectrumError> {
+    //     self.client.sanity_checks(config_network)
+    // }
+
+    pub fn client(&self) -> &ElectrumClient {
+        &self.client
     }
 
     pub fn sync_wallet(&mut self) {
-        self.bdk_wallet.sync_through_electrum(&self.client)
+        self.bdk_wallet.sync_using_electrum(&self.client)
     }
+
+    pub fn common_ancestor(&self) -> Option<BlockChainTip> {
+        let server_tip_height = self.client.chain_tip().height as u32;
+
+        // If electrum returns a tip height that is lower than our previous tip, then checkpoints do
+        // not need updating. We just return the previous tip and use that as the point of agreement.
+        // if new_tip_height < prev_tip.height() {
+        //     return Ok((prev_tip.clone(), Some(prev_tip.height())));
+        // }
+
+        const CHAIN_SUFFIX_LENGTH: u32 = 8;
+        // Atomically fetch the latest `CHAIN_SUFFIX_LENGTH` count of blocks from Electrum. We use this
+        // to construct our checkpoint update.
+        let mut new_blocks = {
+            let start_height = server_tip_height.saturating_sub(CHAIN_SUFFIX_LENGTH - 1);
+            let hashes = self
+                .client
+                .0
+                .block_headers(
+                    height_usize_from_u32(start_height),
+                    CHAIN_SUFFIX_LENGTH as _,
+                )
+                .ok()?
+                .headers
+                .into_iter()
+                .map(|h| h.block_hash());
+            (start_height..).zip(hashes).collect::<BTreeMap<u32, _>>()
+        };
+
+        // Find the "point of agreement" (if any).
+        let agreement_cp = {
+            let mut agreement_cp = Option::<CheckPoint>::None;
+            for cp in self
+                .bdk_wallet
+                .local_chain
+                .tip()
+                .iter()
+                .filter(|cp| cp.height() <= server_tip_height)
+            {
+                let cp_block = cp.block_id();
+                let hash = match new_blocks.get(&cp_block.height) {
+                    Some(&hash) => hash,
+                    None => {
+                        assert!(
+                            cp_block.height <= server_tip_height,
+                            "already checked that server tip cannot be smaller"
+                        );
+                        let hash = self
+                            .client
+                            .0
+                            .block_header(height_usize_from_u32(cp_block.height))
+                            .ok()?
+                            .block_hash();
+                        new_blocks.insert(cp_block.height, hash);
+                        hash
+                    }
+                };
+                if hash == cp_block.hash {
+                    agreement_cp = Some(cp);
+                    break;
+                }
+            }
+            agreement_cp
+        };
+        agreement_cp.as_ref().map(|cp| BlockChainTip {
+            height: height_i32_from_u32(cp.height()),
+            hash: cp.hash(),
+        })
+    }
+
+    // pub fn genesis_block_timestamp(&self) -> u32 {
+    //     self.client.genesis_block_timestamp()
+    // }
+
+    // pub fn genesis_block(&self) -> BlockChainTip {
+    //     self.client.genesis_block()
+    // }
+
+    // pub fn server_chain_tip(&self) -> BlockChainTip {
+    //     self.client.chain_tip()
+    // }
+
+    // pub fn server_block_hash(&self, height: i32) -> Option<bitcoin::BlockHash> {
+    //     self.client.block_hash(height)
+    // }
+
+    // pub fn server_is_in_chain(&self, tip: &BlockChainTip) -> bool {
+    //     self.client.is_in_chain(tip)
+    // }
 }
 
 pub struct ElectrumClient(Client);
 
 impl ElectrumClient {
-    pub fn new(url: &str) -> Result<Self, ElectrumError> {
+    /// Create a new client and perform sanity checks.
+    pub fn new(url: &str, network: &bitcoin::Network) -> Result<Self, ElectrumError> {
         let client = bdk_electrum::electrum_client::Client::new(url)
             .map_err(|e| ElectrumError::Server(e))?;
-        Ok(Self(client))
+        let ele_client = Self(client);
+        ele_client.sanity_checks(network)?;
+        Ok(ele_client)
     }
 
-    pub fn sanity_checks(&self, config_network: &bitcoin::Network) -> Result<(), ElectrumError> {
+    fn sanity_checks(&self, network: &bitcoin::Network) -> Result<(), ElectrumError> {
         let server_features = self
             .0
             .server_features()
@@ -511,15 +633,19 @@ impl ElectrumClient {
             hash.reverse();
             BlockHash::from_byte_array(hash)
         };
-        let expected_hash = expected_genesis_hash(config_network);
+        let expected_hash = expected_genesis_hash(network);
         if server_hash != expected_hash {
-            return Err(ElectrumError::NetworkMismatch(expected_hash, server_hash));
+            return Err(ElectrumError::GenesisHashMismatch(
+                expected_hash,
+                server_hash,
+            ));
         }
         Ok(())
     }
 
     pub fn chain_tip(&self) -> BlockChainTip {
-        let HeaderNotification { height, .. } = self.0.block_headers_subscribe().unwrap();
+        let HeaderNotification { height, .. } =
+            self.0.block_headers_subscribe().expect("must succeed");
         let new_tip_height = height as i32;
         let new_tip_hash = self.block_hash(new_tip_height).unwrap();
         BlockChainTip {
@@ -531,8 +657,8 @@ impl ElectrumClient {
     pub fn block_hash(&self, height: i32) -> Option<bitcoin::BlockHash> {
         let hash = self
             .0
-            .block_header(height.try_into().unwrap())
-            .expect("msg")
+            .block_header(height_usize_from_i32(height))
+            .ok()?
             .block_hash();
         Some(hash)
     }
@@ -557,5 +683,21 @@ impl ElectrumClient {
             .expect("Genesis block hash must always be there")
             .block_hash();
         BlockChainTip { hash, height: 0 }
+    }
+
+    pub fn broadcast_tx(&self, tx: &bitcoin::Transaction) -> Result<(), String> {
+        match self.0.transaction_broadcast(tx) {
+            Ok(_txid) => Ok(()),
+            // TODO: check for which error types we shouldn't panic
+            Err(e) => panic!("Unexpected error when broadcasting transaction: '{}'.", e),
+        }
+    }
+
+    pub fn tip_time(&self) -> Option<u32> {
+        let tip_height = self.chain_tip().height;
+        self.0
+            .block_header(height_usize_from_i32(tip_height))
+            .ok()
+            .map(|bh| bh.time)
     }
 }

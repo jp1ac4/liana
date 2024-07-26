@@ -14,7 +14,7 @@ pub mod spend;
 mod testutils;
 
 pub use bip39;
-use bitcoin::electrum::{bdk_wallet_from_db, Electrum, ElectrumClient, ElectrumError};
+use bitcoin::electrum::{Electrum, ElectrumError};
 pub use miniscript;
 
 pub use crate::bitcoin::d::{BitcoinD, BitcoindError, WalletError};
@@ -216,6 +216,9 @@ fn setup_sqlite(
     Ok(sqlite)
 }
 
+// Connect to Electrum and do some sanity checks. Then create a BDK-based wallet and populate it
+// using existing DB data.
+// If all went well, returns the interface to Electrum.
 fn setup_electrum(
     config: &Config,
     db: sync::Arc<sync::Mutex<dyn DatabaseInterface>>,
@@ -224,28 +227,9 @@ fn setup_electrum(
         Some(config::BitcoinBackend::Electrum(electrum_config)) => electrum_config,
         _ => Err(StartupError::MissingElectrumConfig)?,
     };
-    let client = ElectrumClient::new(&electrum_config.addr.to_string())
-        .map_err(|e| StartupError::Electrum(e))?;
-    client
-        .sanity_checks(&config.bitcoin_config.network)
-        .map_err(|e| StartupError::Electrum(e))?;
-
-    let receive_desc = config
-        .main_descriptor
-        .receive_descriptor()
-        .as_descriptor_public_key()
-        .clone();
-
-    let change_desc = config
-        .main_descriptor
-        .receive_descriptor()
-        .as_descriptor_public_key()
-        .clone();
-
     let mut db_conn = db.connection();
-    let bdk_wallet = bdk_wallet_from_db(&mut db_conn, &client, receive_desc, change_desc).unwrap();
-
-    let electrum = Electrum { client, bdk_wallet };
+    let electrum = Electrum::from_db(&mut db_conn, &electrum_config.addr.to_string())
+        .map_err(|e| StartupError::Electrum(e))?;
     Ok(electrum)
 }
 

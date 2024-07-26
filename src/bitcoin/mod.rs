@@ -12,16 +12,9 @@ use crate::{
     descriptors,
     poller::looper::UpdatedCoins,
 };
-use bdk_electrum::{bdk_chain::local_chain::CheckPoint, electrum_client::ElectrumApi};
 pub use d::{MempoolEntry, SyncProgress};
 
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    convert::TryInto,
-    fmt,
-    str::FromStr,
-    sync,
-};
+use std::{collections::HashSet, fmt, str::FromStr, sync};
 
 use miniscript::bitcoin::{self, address, secp256k1};
 
@@ -49,6 +42,17 @@ pub fn expected_genesis_hash(network: &bitcoin::Network) -> bitcoin::BlockHash {
         net => panic!("Unexpected network '{}'", net),
     };
     bitcoin::BlockHash::from_str(hash).expect("must be valid")
+}
+
+// FIXME: We could avoid this type (and all the conversions entailing allocations) if bitcoind
+// exposed the derivation index from the parent descriptor in the LSB result.
+#[derive(Debug, Clone)]
+pub struct UTxO {
+    pub outpoint: bitcoin::OutPoint,
+    pub amount: bitcoin::Amount,
+    pub block_height: Option<i32>,
+    pub address: bitcoin::Address<address::NetworkUnchecked>,
+    pub is_immature: bool,
 }
 
 /// Information about a block
@@ -454,38 +458,6 @@ impl BitcoinInterface for sync::Arc<sync::Mutex<dyn BitcoinInterface + 'static>>
             .update_coins(db_conn, previous_tip, descs, secp)
     }
 
-    // fn received_coins(
-    //     &self,
-    //     tip: &BlockChainTip,
-    //     descs: &[descriptors::SinglePathLianaDesc],
-    // ) -> Vec<UTxO> {
-    //     self.lock().unwrap().received_coins(tip, descs)
-    // }
-
-    // fn confirmed_coins(
-    //     &self,
-    //     outpoints: &[bitcoin::OutPoint],
-    // ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
-    //     self.lock().unwrap().confirmed_coins(outpoints)
-    // }
-
-    // fn spending_coins(
-    //     &self,
-    //     outpoints: &[bitcoin::OutPoint],
-    // ) -> Vec<(bitcoin::OutPoint, bitcoin::Txid)> {
-    //     self.lock().unwrap().spending_coins(outpoints)
-    // }
-
-    // fn spent_coins(
-    //     &self,
-    //     outpoints: &[(bitcoin::OutPoint, bitcoin::Txid)],
-    // ) -> (
-    //     Vec<(bitcoin::OutPoint, bitcoin::Txid, Block)>,
-    //     Vec<bitcoin::OutPoint>,
-    // ) {
-    //     self.lock().unwrap().spent_coins(outpoints)
-    // }
-
     fn common_ancestor(&self, tip: &BlockChainTip) -> Option<BlockChainTip> {
         self.lock().unwrap().common_ancestor(tip)
     }
@@ -530,113 +502,103 @@ impl BitcoinInterface for sync::Arc<sync::Mutex<dyn BitcoinInterface + 'static>>
     }
 }
 
-// FIXME: We could avoid this type (and all the conversions entailing allocations) if bitcoind
-// exposed the derivation index from the parent descriptor in the LSB result.
-#[derive(Debug, Clone)]
-pub struct UTxO {
-    pub outpoint: bitcoin::OutPoint,
-    pub amount: bitcoin::Amount,
-    pub block_height: Option<i32>,
-    pub address: bitcoin::Address<address::NetworkUnchecked>,
-    pub is_immature: bool,
-}
-
 impl BitcoinInterface for electrum::Electrum {
     fn update_coins(
         &mut self,
         db_conn: &mut Box<dyn DatabaseConnection>,
-        _previous_tip: &BlockChainTip,
+        previous_tip: &BlockChainTip,
         _descs: &[descriptors::SinglePathLianaDesc],
         secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) -> UpdatedCoins {
-        self.bdk_wallet.reveal(db_conn);
+        // Make sure `previous_tip` is same as our local tip.
+        let local_tip = self.bdk_wallet.chain_tip();
+        assert_eq!(previous_tip, &local_tip);
 
-        let existing_coins = &self.bdk_wallet.coins();
+        self.bdk_wallet.reveal_spks(db_conn);
+
+        let pre_sync_coins = &self.bdk_wallet.coins();
         self.sync_wallet();
         let wallet_coins = &self.bdk_wallet.coins();
 
-        let updated_coins: HashMap<_, _> = wallet_coins
-        .iter()
-        .filter_map(|c|
-            // Keep new and updated
-            if existing_coins.get(c.0) != Some(c.1) {
-                Some((c.0.clone(), c.1))
-            } else {
-                None
-            }
-        ).collect();
+        // All newly received coins.
+        let mut received = Vec::new();
+        // All newly confirmed coins, which may include those from `received`.
+        let mut confirmed = Vec::new();
+        // All pre-sync coins whose spend txid has changed (could be None or Some).
+        let mut expired_spending = Vec::new();
+        // Newly received coins that are spending together with existing coins
+        // whose spending info has changed.
+        let mut spending = Vec::new();
+        // All coins that are newly spent, which may include those from `spending`.
+        let mut spent = Vec::new();
 
-        let received: Vec<_> = wallet_coins
-            .values()
-            .filter_map(|c| {
-                if !existing_coins.contains_key(&c.outpoint) {
-                    if c.derivation_index > db_conn.receive_index() {
-                        db_conn.set_receive_index(c.derivation_index, secp);
+        for (w_op, w_c) in wallet_coins {
+            if let Some(pre_c) = pre_sync_coins.get(w_op) {
+                if pre_c != w_c {
+                    // If `pre_c.block_info.is_some()`, then we can assume the value hasn't changed
+                    // as otherwise there must have been a reorg and the DB would have been rolled back.
+                    if pre_c.block_info.is_none() && w_c.block_info.is_some() {
+                        let block = w_c.block_info.expect("already checked");
+                        confirmed.push((w_op.clone(), block.height, block.time));
                     }
-                    if c.derivation_index > db_conn.change_index() {
-                        db_conn.set_change_index(c.derivation_index, secp);
+                    if pre_c.spend_txid != w_c.spend_txid {
+                        if pre_c.spend_txid.is_some() {
+                            expired_spending.push(w_op.clone());
+                        }
+                        if let Some(txid) = w_c.spend_txid {
+                            spending.push((w_op.clone(), txid));
+                        }
                     }
-
-                    Some(Coin {
-                        outpoint: c.outpoint,
-                        is_immature: c.is_immature,
-                        block_info: c.block_info.map(|info| BlockInfo {
-                            height: info.height,
-                            time: info.time,
-                        }),
-                        amount: c.amount,
-                        derivation_index: c.derivation_index,
-                        is_change: c.is_change,
-                        spend_txid: c.spend_txid,
-                        spend_block: c.spend_block.map(|info| BlockInfo {
-                            height: info.height,
-                            time: info.time,
-                        }),
-                    })
-                } else {
-                    None
+                    // If `pre_c.spend_block.is_some()`, then we can assume the value hasn't changed
+                    // as otherwise there must have been a reorg and the DB would have been rolled back.
+                    if pre_c.spend_block.is_none() && w_c.spend_block.is_some() {
+                        let block = w_c.spend_block.expect("already checked");
+                        let txid = w_c.spend_txid.expect("must be present if spend confirmed");
+                        spent.push((w_op.clone(), txid, block.height, block.time));
+                    }
                 }
-            })
-            .collect();
-        let confirmed: Vec<_> = updated_coins
-            //.clone()
-            .iter()
-            .filter_map(|(op, c)| {
-                c.block_info
-                    .map(|info| (op.clone(), info.height, info.time))
-            })
-            .collect();
-        let expired: Vec<_> = existing_coins
+            } else {
+                if w_c.derivation_index > db_conn.receive_index() {
+                    db_conn.set_receive_index(w_c.derivation_index, secp);
+                }
+                if w_c.derivation_index > db_conn.change_index() {
+                    db_conn.set_change_index(w_c.derivation_index, secp);
+                }
+                // TODO: add method to convert from one to the other.
+                let coin = Coin {
+                    outpoint: w_c.outpoint,
+                    is_immature: w_c.is_immature,
+                    block_info: w_c.block_info.map(|info| BlockInfo {
+                        height: info.height,
+                        time: info.time,
+                    }),
+                    amount: w_c.amount,
+                    derivation_index: w_c.derivation_index,
+                    is_change: w_c.is_change,
+                    spend_txid: w_c.spend_txid,
+                    spend_block: w_c.spend_block.map(|info| BlockInfo {
+                        height: info.height,
+                        time: info.time,
+                    }),
+                };
+                received.push(coin);
+                if let Some(block) = w_c.block_info {
+                    confirmed.push((w_op.clone(), block.height, block.time));
+                }
+                if let Some(txid) = w_c.spend_txid {
+                    spending.push((w_op.clone(), txid));
+                }
+                if let Some(block) = w_c.spend_block {
+                    let spend_txid = w_c.spend_txid.expect("must be present if spend confirmed");
+                    spent.push((w_op.clone(), spend_txid, block.height, block.time));
+                }
+            }
+        }
+        // Any pre-sync coins that are no longer in the wallet.
+        let expired: Vec<_> = pre_sync_coins
             .keys()
             .filter(|c| !wallet_coins.contains_key(c))
             .cloned()
-            .collect();
-        let expired_spending: Vec<_> = existing_coins
-            .iter()
-            .filter(|c| c.1.spend_txid.is_some() && c.1.spend_block.is_none())
-            .filter_map(|c| {
-                wallet_coins
-                    .get(c.0)
-                    .filter(|wc| wc.spend_txid != Some(c.1.spend_txid.unwrap()))
-            })
-            .map(|c| c.outpoint)
-            .collect();
-        let spending: Vec<_> = updated_coins
-            .iter()
-            .filter_map(|c| {
-                if c.1.spend_block.is_none() {
-                    c.1.spend_txid.map(|txid| (c.0.clone().clone(), txid))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let spent: Vec<_> = updated_coins
-            .into_iter()
-            .filter_map(|(op, c)| {
-                c.spend_block
-                    .map(|info| (op.clone(), c.spend_txid.unwrap(), info.height, info.time))
-            })
             .collect();
 
         UpdatedCoins {
@@ -649,131 +611,35 @@ impl BitcoinInterface for electrum::Electrum {
         }
     }
 
-    // fn received_coins(
-    //         &self,
-    //         tip: &BlockChainTip,
-    //         descs: &[descriptors::SinglePathLianaDesc],
-    //     ) -> Vec<UTxO> {
-    //     let secp = secp256k1::Secp256k1::verification_only();
-    //     let receive_desc = descs.first().unwrap();
-    //     let change_desc = descs.last().unwrap();
-    //     let existing_coins = self.bdk_wallet.existing_coins;
-    //     let wallet_coins = self.bdk_wallet.wallet_coins;
-    //     wallet_coins
-    //     .iter()
-    //     .filter_map(|(op, c)|
-    //         if !existing_coins.contains_key(op) {
-    //             let desc_to_use = if c.is_change { change_desc } else { receive_desc };
-    //             Some(UTxO {
-    //                 outpoint: *op,
-    //                 block_height: c.block_info.map(|info| info.height),
-    //                 amount: c.amount,
-    //                 address: desc_to_use.derive(c.derivation_index, &secp).address(self.bdk_wallet.network).as_unchecked().clone(),
-    //                 is_immature: c.is_immature,
-    //             })
-    //         } else {
-    //             None
-    //         }
-    //     ).collect()
-    // }
-
-    // fn confirmed_coins(
-    //         &self,
-    //         outpoints: &[bitcoin::OutPoint],
-    //     ) -> (Vec<(bitcoin::OutPoint, i32, u32)>, Vec<bitcoin::OutPoint>) {
-
-    // }
-
     fn genesis_block_timestamp(&self) -> u32 {
-        self.client.genesis_block_timestamp()
+        self.client().genesis_block_timestamp()
     }
 
     fn genesis_block(&self) -> BlockChainTip {
-        self.client.genesis_block()
+        self.client().genesis_block()
     }
 
     fn chain_tip(&self) -> BlockChainTip {
-        self.client.chain_tip()
+        self.client().chain_tip()
     }
 
     fn block_hash(&self, height: i32) -> Option<bitcoin::BlockHash> {
-        self.client.block_hash(height)
+        self.client().block_hash(height)
     }
 
     fn is_in_chain(&self, tip: &BlockChainTip) -> bool {
-        self.client.is_in_chain(tip)
+        self.client().is_in_chain(tip)
     }
 
-    fn common_ancestor(&self, _tip: &BlockChainTip) -> Option<BlockChainTip> {
-        let new_tip_height = self.chain_tip().height as u32;
-
-        // If electrum returns a tip height that is lower than our previous tip, then checkpoints do
-        // not need updating. We just return the previous tip and use that as the point of agreement.
-        // if new_tip_height < prev_tip.height() {
-        //     return Ok((prev_tip.clone(), Some(prev_tip.height())));
-        // }
-
-        const CHAIN_SUFFIX_LENGTH: u32 = 8;
-        // Atomically fetch the latest `CHAIN_SUFFIX_LENGTH` count of blocks from Electrum. We use this
-        // to construct our checkpoint update.
-        let mut new_blocks = {
-            let start_height = new_tip_height.saturating_sub(CHAIN_SUFFIX_LENGTH - 1);
-            let hashes = self
-                .client()
-                .block_headers(start_height as _, CHAIN_SUFFIX_LENGTH as _)
-                .unwrap()
-                .headers
-                .into_iter()
-                .map(|h| h.block_hash());
-            (start_height..).zip(hashes).collect::<BTreeMap<u32, _>>()
-        };
-
-        // Find the "point of agreement" (if any).
-        let agreement_cp = {
-            let mut agreement_cp = Option::<CheckPoint>::None;
-            for cp in self
-                .bdk_wallet
-                .local_chain
-                .tip()
-                .iter()
-                .filter(|cp| cp.height() <= new_tip_height)
-            {
-                let cp_block = cp.block_id();
-                let hash = match new_blocks.get(&cp_block.height) {
-                    Some(&hash) => hash,
-                    None => {
-                        assert!(
-                            new_tip_height >= cp_block.height,
-                            "already checked that new tip cannot be smaller"
-                        );
-                        let hash = self
-                            .client()
-                            .block_header(cp_block.height as _)
-                            .unwrap()
-                            .block_hash();
-                        new_blocks.insert(cp_block.height, hash);
-                        hash
-                    }
-                };
-                if hash == cp_block.hash {
-                    agreement_cp = Some(cp);
-                    break;
-                }
-            }
-            agreement_cp
-        };
-        agreement_cp.as_ref().map(|cp| BlockChainTip {
-            height: cp.height().try_into().unwrap(),
-            hash: cp.hash(),
-        })
+    fn common_ancestor(&self, tip: &BlockChainTip) -> Option<BlockChainTip> {
+        // Make sure `tip` is same as our local tip.
+        let local_tip = self.bdk_wallet.chain_tip();
+        assert_eq!(tip, &local_tip);
+        self.common_ancestor()
     }
 
     fn broadcast_tx(&self, tx: &bitcoin::Transaction) -> Result<(), String> {
-        match self.client().transaction_broadcast(tx) {
-            Ok(_txid) => Ok(()),
-            // TODO: check for which error types we shouldn't panic
-            Err(e) => panic!("Unexpected error when broadcasting transaction: '{}'.", e),
-        }
+        self.client().broadcast_tx(tx)
     }
 
     fn wallet_transaction(
@@ -826,10 +692,6 @@ impl BitcoinInterface for electrum::Electrum {
     }
 
     fn tip_time(&self) -> Option<u32> {
-        let tip_height: usize = self.chain_tip().height.try_into().unwrap();
-        self.client()
-            .block_header(tip_height)
-            .ok()
-            .map(|bh| bh.time)
+        self.client().tip_time()
     }
 }
