@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet},
     convert::TryInto,
     sync::Arc,
 };
@@ -402,6 +402,28 @@ impl BdkWallet {
             height: a.confirmation_height.try_into().unwrap(),
         });
         let _ = self.graph.apply_update(graph_update);
+    }
+
+    // TODO: this is WIP
+    fn _get_ancestors(&self, tx: bitcoin::Transaction) {
+        let mut unconfirmed_txids = HashSet::new();
+        for coin in self.coins().into_values() {
+            if coin.block_info.is_none() {
+                unconfirmed_txids.insert(coin.outpoint.txid);
+            }
+            if let Some(spend_txid) = coin.spend_txid {
+                if coin.spend_block.is_none() {
+                    unconfirmed_txids.insert(spend_txid);
+                }
+            }
+        }
+        let _ = self.graph.graph().walk_ancestors(tx, |_depth, anc_tx| {
+            if unconfirmed_txids.contains(&anc_tx.txid()) {
+                Some(anc_tx)
+            } else {
+                None
+            }
+        });
     }
 }
 
