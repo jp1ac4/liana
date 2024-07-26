@@ -19,7 +19,7 @@ use bdk_electrum::{
 };
 
 use crate::{
-    bitcoin::{expected_genesis_hash, BlockChainTip, COINBASE_MATURITY, LOOK_AHEAD_LIMIT},
+    bitcoin::{expected_genesis_hash, Block, BlockChainTip, COINBASE_MATURITY, LOOK_AHEAD_LIMIT},
     database::{BlockInfo, Coin, DatabaseConnection},
 };
 
@@ -80,8 +80,8 @@ pub enum KeychainType {
 }
 
 pub struct BdkWallet {
-    pub graph: IndexedTxGraph<ConfirmationTimeHeightAnchor, KeychainTxOutIndex<KeychainType>>,
-    pub local_chain: LocalChain,
+    graph: IndexedTxGraph<ConfirmationTimeHeightAnchor, KeychainTxOutIndex<KeychainType>>,
+    local_chain: LocalChain,
     // Store descriptors for use when getting SPKs.
     receive_desc: Descriptor<DescriptorPublicKey>,
     change_desc: Descriptor<DescriptorPublicKey>,
@@ -89,10 +89,6 @@ pub struct BdkWallet {
 
 impl BdkWallet {
     /// Create a new BDK wallet using existing data from the database.
-    ///
-    /// It retrieves deposit and spend block hashes of coins from Electrum,
-    /// as long as the DB chain tip is still in the best chain. Otherwise,
-    /// it skips loading existing coins.
     fn from_db(db_conn: &mut Box<dyn DatabaseConnection>) -> Result<Self, ElectrumError> {
         let main_descriptor = db_conn.main_descriptor();
         println!("setting up BDK wallet from DB");
@@ -298,6 +294,21 @@ impl BdkWallet {
             wallet_coins.len()
         );
         wallet_coins.into_iter().map(|c| (c.outpoint, c)).collect()
+    }
+
+    fn get_transaction(
+        &self,
+        txid: &bitcoin::Txid,
+    ) -> Option<(bitcoin::Transaction, Option<Block>)> {
+        self.graph.graph().get_tx_node(*txid).map(|tx_node| {
+            let block = tx_node.anchors.first().map(|info| Block {
+                hash: info.anchor_block.hash,
+                height: height_i32_from_u32(info.confirmation_height),
+                time: info.confirmation_time.try_into().unwrap(),
+            });
+            let tx = tx_node.tx.as_ref().clone();
+            (tx, block)
+        })
     }
 
     /// Get the (local) chain tip.
@@ -513,6 +524,13 @@ impl Electrum {
             height: height_i32_from_u32(cp.height()),
             hash: cp.hash(),
         })
+    }
+
+    pub fn wallet_transaction(
+        &self,
+        txid: &bitcoin::Txid,
+    ) -> Option<(bitcoin::Transaction, Option<Block>)> {
+        self.bdk_wallet.get_transaction(txid)
     }
 }
 

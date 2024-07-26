@@ -14,7 +14,7 @@ use crate::{
 };
 pub use d::{MempoolEntry, SyncProgress};
 
-use std::{collections::HashSet, convert::TryInto, fmt, str::FromStr, sync};
+use std::{collections::HashSet, fmt, str::FromStr, sync};
 
 use miniscript::bitcoin::{self, address, secp256k1};
 
@@ -639,19 +639,7 @@ impl BitcoinInterface for electrum::Electrum {
         &self,
         txid: &bitcoin::Txid,
     ) -> Option<(bitcoin::Transaction, Option<Block>)> {
-        self.bdk_wallet
-            .graph
-            .graph()
-            .get_tx_node(*txid)
-            .map(|tx_node| {
-                let block = tx_node.anchors.first().map(|info| Block {
-                    hash: info.anchor_block.hash,
-                    height: info.confirmation_height.try_into().unwrap(),
-                    time: info.confirmation_time.try_into().unwrap(),
-                });
-                let tx = tx_node.tx.as_ref().clone();
-                (tx, block)
-            })
+        self.wallet_transaction(txid)
     }
 
     fn mempool_entry(&self, _txid: &bitcoin::Txid) -> Option<MempoolEntry> {
