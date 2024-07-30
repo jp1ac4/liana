@@ -591,12 +591,10 @@ impl ElectrumClient {
         BlockChainTip { hash, height: 0 }
     }
 
-    pub fn broadcast_tx(&self, tx: &bitcoin::Transaction) -> Result<(), String> {
-        match self.0.transaction_broadcast(tx) {
-            Ok(_txid) => Ok(()),
-            // TODO: check for which error types we shouldn't panic
-            Err(e) => panic!("Unexpected error when broadcasting transaction: '{}'.", e),
-        }
+    pub fn broadcast_tx(&self, tx: &bitcoin::Transaction) -> Result<bitcoin::Txid, ElectrumError> {
+        self.0
+            .transaction_broadcast(tx)
+            .map_err(ElectrumError::Server)
     }
 
     pub fn tip_time(&self) -> Option<u32> {

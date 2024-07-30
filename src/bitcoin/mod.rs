@@ -632,7 +632,10 @@ impl BitcoinInterface for electrum::Electrum {
     }
 
     fn broadcast_tx(&self, tx: &bitcoin::Transaction) -> Result<(), String> {
-        self.client().broadcast_tx(tx)
+        match self.client().broadcast_tx(tx) {
+            Ok(_txid) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     fn wallet_transaction(
