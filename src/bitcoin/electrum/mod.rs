@@ -308,7 +308,7 @@ impl BdkWallet {
     }
 
     /// Sync the wallet using Electrum.
-    fn sync_using_electrum(&mut self, client: &ElectrumClient) {
+    fn sync_using_electrum(&mut self, client: &ElectrumClient) -> Result<(), ElectrumError> {
         let chain_tip = self.local_chain.tip();
         println!(
             "sync_through_electrum: local chain tip: {}",
@@ -329,16 +329,14 @@ impl BdkWallet {
                 .map(|(_, script)| script.clone())
                 .collect();
             request = request.chain_spks(all_spks);
-
-            let total_spks = request.spks.len();
-            log::debug!("total_spks: {total_spks}");
+            log::debug!("num SPKs for sync: {}", request.spks.len());
 
             let sync_result = client
                 .0
                 .sync(request, 10, true)
-                .unwrap()
+                .map_err(ElectrumError::Server)?
                 .with_confirmation_time_height_anchor(&client.0)
-                .unwrap();
+                .map_err(ElectrumError::Server)?;
             (sync_result.chain_update, sync_result.graph_update, None)
         } else {
             log::info!("Performing full scan.");
@@ -351,9 +349,9 @@ impl BdkWallet {
             let scan_result = client
                 .0
                 .full_scan(request, 50, 10, true)
-                .unwrap()
+                .map_err(ElectrumError::Server)?
                 .with_confirmation_time_height_anchor(&client.0)
-                .unwrap();
+                .map_err(ElectrumError::Server)?;
             (
                 scan_result.chain_update,
                 scan_result.graph_update,
@@ -367,8 +365,12 @@ impl BdkWallet {
             "sync_through_electrum: chain_update height: {}",
             chain_update.height()
         );
-        let _ = self.local_chain.apply_update(chain_update).unwrap();
+        let _ = self
+            .local_chain
+            .apply_update(chain_update)
+            .expect("update connects to local chain");
         let _ = self.graph.apply_update(graph_update);
+        Ok(())
     }
 
     // TODO: this is WIP
@@ -437,7 +439,7 @@ impl Electrum {
         &self.client
     }
 
-    pub fn sync_wallet(&mut self) {
+    pub fn sync_wallet(&mut self) -> Result<(), ElectrumError> {
         self.bdk_wallet.sync_using_electrum(&self.client)
     }
 

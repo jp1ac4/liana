@@ -516,12 +516,6 @@ impl BitcoinInterface for electrum::Electrum {
 
         self.bdk_wallet.reveal_spks(db_conn);
 
-        let pre_sync_coins = &self.bdk_wallet.coins();
-        log::debug!("pre sync coins: {:?}", pre_sync_coins);
-        self.sync_wallet();
-        let wallet_coins = &self.bdk_wallet.coins();
-        log::debug!("wallet coins: {:?}", wallet_coins);
-
         // All newly received coins.
         let mut received = Vec::new();
         // All newly confirmed coins, which may include those from `received`.
@@ -533,66 +527,80 @@ impl BitcoinInterface for electrum::Electrum {
         let mut spending = Vec::new();
         // All coins that are newly spent, which may include those from `spending`.
         let mut spent = Vec::new();
+        // Any pre-sync coins that are no longer in the wallet.
+        let mut expired = Vec::new();
 
-        for (w_op, w_c) in wallet_coins {
-            if let Some(pre_c) = pre_sync_coins.get(w_op) {
-                if pre_c != w_c {
-                    // If `pre_c.block_info.is_some()`, then we can assume the value hasn't changed
-                    // as otherwise there must have been a reorg and the DB would have been rolled back.
-                    if pre_c.block_info.is_none() && w_c.block_info.is_some() {
-                        let block = w_c.block_info.expect("already checked");
-                        // let height: i32 = block.height.try_into().unwrap();
+        let pre_sync_coins = &self.bdk_wallet.coins();
+        log::debug!("pre sync coins: {:?}", pre_sync_coins);
+        // If there was an error, the wallet will not have changed and so there will
+        // be no updated coins.
+        if let Err(e) = self.sync_wallet() {
+            log::error!("error syncing wallet: {}", e);
+        } else {
+            let wallet_coins = &self.bdk_wallet.coins();
+            log::debug!("wallet coins: {:?}", wallet_coins);
+            for (w_op, w_c) in wallet_coins {
+                if let Some(pre_c) = pre_sync_coins.get(w_op) {
+                    if pre_c != w_c {
+                        // If `pre_c.block_info.is_some()`, then we can assume the value hasn't changed
+                        // as otherwise there must have been a reorg and the DB would have been rolled back.
+                        if pre_c.block_info.is_none() && w_c.block_info.is_some() {
+                            let block = w_c.block_info.expect("already checked");
+                            // let height: i32 = block.height.try_into().unwrap();
+                            // let time: u32 = block.confirmation_time.try_into().unwrap();
+                            confirmed.push((*w_op, block.height, block.time));
+                        }
+                        if pre_c.spend_txid != w_c.spend_txid {
+                            if pre_c.spend_txid.is_some() {
+                                expired_spending.push(*w_op);
+                            }
+                            if let Some(txid) = w_c.spend_txid {
+                                spending.push((*w_op, txid));
+                            }
+                        }
+                        // If `pre_c.spend_block.is_some()`, then we can assume the value hasn't changed
+                        // as otherwise there must have been a reorg and the DB would have been rolled back.
+                        if pre_c.spend_block.is_none() && w_c.spend_block.is_some() {
+                            let block = w_c.spend_block.expect("already checked");
+                            let txid = w_c.spend_txid.expect("must be present if spend confirmed");
+                            // let height: i32 = block.confirmation_height.try_into().unwrap();
+                            // let time: u32 = block.confirmation_time.try_into().unwrap();
+                            spent.push((*w_op, txid, block.height, block.time));
+                        }
+                    }
+                } else {
+                    if w_c.derivation_index > db_conn.receive_index() {
+                        db_conn.set_receive_index(w_c.derivation_index, secp);
+                    }
+                    if w_c.derivation_index > db_conn.change_index() {
+                        db_conn.set_change_index(w_c.derivation_index, secp);
+                    }
+                    received.push(*w_c);
+                    if let Some(block) = w_c.block_info {
+                        // let height: i32 = block.confirmation_height.try_into().unwrap();
                         // let time: u32 = block.confirmation_time.try_into().unwrap();
                         confirmed.push((*w_op, block.height, block.time));
                     }
-                    if pre_c.spend_txid != w_c.spend_txid {
-                        if pre_c.spend_txid.is_some() {
-                            expired_spending.push(*w_op);
-                        }
-                        if let Some(txid) = w_c.spend_txid {
-                            spending.push((*w_op, txid));
-                        }
+                    if let Some(txid) = w_c.spend_txid {
+                        spending.push((*w_op, txid));
                     }
-                    // If `pre_c.spend_block.is_some()`, then we can assume the value hasn't changed
-                    // as otherwise there must have been a reorg and the DB would have been rolled back.
-                    if pre_c.spend_block.is_none() && w_c.spend_block.is_some() {
-                        let block = w_c.spend_block.expect("already checked");
-                        let txid = w_c.spend_txid.expect("must be present if spend confirmed");
+                    if let Some(block) = w_c.spend_block {
+                        let spend_txid =
+                            w_c.spend_txid.expect("must be present if spend confirmed");
                         // let height: i32 = block.confirmation_height.try_into().unwrap();
                         // let time: u32 = block.confirmation_time.try_into().unwrap();
-                        spent.push((*w_op, txid, block.height, block.time));
+                        spent.push((*w_op, spend_txid, block.height, block.time));
                     }
                 }
-            } else {
-                if w_c.derivation_index > db_conn.receive_index() {
-                    db_conn.set_receive_index(w_c.derivation_index, secp);
-                }
-                if w_c.derivation_index > db_conn.change_index() {
-                    db_conn.set_change_index(w_c.derivation_index, secp);
-                }
-                received.push(*w_c);
-                if let Some(block) = w_c.block_info {
-                    // let height: i32 = block.confirmation_height.try_into().unwrap();
-                    // let time: u32 = block.confirmation_time.try_into().unwrap();
-                    confirmed.push((*w_op, block.height, block.time));
-                }
-                if let Some(txid) = w_c.spend_txid {
-                    spending.push((*w_op, txid));
-                }
-                if let Some(block) = w_c.spend_block {
-                    let spend_txid = w_c.spend_txid.expect("must be present if spend confirmed");
-                    // let height: i32 = block.confirmation_height.try_into().unwrap();
-                    // let time: u32 = block.confirmation_time.try_into().unwrap();
-                    spent.push((*w_op, spend_txid, block.height, block.time));
-                }
             }
-        }
-        // Any pre-sync coins that are no longer in the wallet.
-        let expired: Vec<_> = pre_sync_coins
-            .keys()
-            .filter(|c| !wallet_coins.contains_key(c))
-            .cloned()
-            .collect();
+            // Any pre-sync coins that are no longer in the wallet.
+            expired.extend(
+                pre_sync_coins
+                    .keys()
+                    .filter(|c| !wallet_coins.contains_key(c))
+                    .cloned(),
+            );
+        };
 
         UpdatedCoins {
             received,
