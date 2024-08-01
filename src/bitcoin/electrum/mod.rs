@@ -174,9 +174,9 @@ impl BdkWallet {
     pub fn reveal_spks(&mut self, db_conn: &mut Box<dyn DatabaseConnection>) {
         let mut last_active_indices = BTreeMap::new();
         let receive_index: u32 = db_conn.receive_index().into();
-        last_active_indices.insert(KeychainType::Deposit, receive_index.saturating_add(0));
+        last_active_indices.insert(KeychainType::Deposit, receive_index);
         let change_index: u32 = db_conn.change_index().into();
-        last_active_indices.insert(KeychainType::Change, change_index.saturating_add(0));
+        last_active_indices.insert(KeychainType::Change, change_index);
         let a = self
             .graph
             .index
@@ -323,13 +323,12 @@ impl BdkWallet {
             let all_spks: Vec<_> = self
                 .graph
                 .index
-                .revealed_spks(..)
-                .map(|(k, i, spk)| (k.to_owned(), i, spk.to_owned()))
-                .collect::<Vec<_>>();
-            request = request.chain_spks(all_spks.into_iter().map(|(k, spk_i, spk)| {
-                eprint!("Scanning {:?}: {}", k, spk_i);
-                spk
-            }));
+                .inner() // we include lookahead SPKs
+                .all_spks()
+                .iter()
+                .map(|(_, script)| script.clone())
+                .collect();
+            request = request.chain_spks(all_spks);
 
             let total_spks = request.spks.len();
             log::debug!("total_spks: {total_spks}");
