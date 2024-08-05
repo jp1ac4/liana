@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     convert::TryInto,
     sync::Arc,
 };
@@ -12,7 +12,7 @@ use bdk_electrum::{
         miniscript::{Descriptor, DescriptorPublicKey},
         spk_client::{FullScanRequest, SyncRequest},
         tx_graph::{self, TxGraph},
-        BlockId, ChainOracle, ChainPosition, ConfirmationTimeHeightAnchor, IndexedTxGraph,
+        BlockId, ChainPosition, ConfirmationTimeHeightAnchor, IndexedTxGraph,
     },
     electrum_client::{Client, ElectrumApi, HeaderNotification},
     ElectrumExt,
@@ -296,17 +296,6 @@ impl BdkWallet {
         })
     }
 
-    /// Get the (local) chain tip.
-    pub fn chain_tip(&self) -> BlockChainTip {
-        self.local_chain
-            .get_chain_tip()
-            .map(|t| BlockChainTip {
-                hash: t.hash,
-                height: height_i32_from_u32(t.height),
-            })
-            .expect("must contain at least genesis")
-    }
-
     /// Sync the wallet using Electrum.
     fn sync_using_electrum(&mut self, client: &ElectrumClient) -> Result<(), ElectrumError> {
         let chain_tip = self.local_chain.tip();
@@ -369,30 +358,30 @@ impl BdkWallet {
             .local_chain
             .apply_update(chain_update)
             .expect("update connects to local chain");
-        let _ = self.graph.apply_update(graph_update);
-        Ok(())
-    }
 
-    // TODO: this is WIP
-    fn _get_ancestors(&self, tx: bitcoin::Transaction) {
-        let mut unconfirmed_txids = HashSet::new();
-        for coin in self.coins().into_values() {
-            if coin.block_info.is_none() {
-                unconfirmed_txids.insert(coin.outpoint.txid);
-            }
-            if let Some(spend_txid) = coin.spend_txid {
-                if coin.spend_block.is_none() {
-                    unconfirmed_txids.insert(spend_txid);
-                }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .expect("must be greater than unix epoch")
+            .as_secs();
+
+        let mut graph_cs = graph_update.initial_changeset();
+        for tx in &graph_cs.txs {
+            let txid = tx.txid();
+            println!("checking txid {}", txid);
+            if let Some(ChainPosition::Unconfirmed(_u)) = graph_update.get_chain_position(
+                &self.local_chain,
+                self.local_chain.tip().block_id(),
+                txid,
+            ) {
+                println!("setting last seen for {} to {}", txid, now);
+                graph_cs.last_seen.insert(txid, now);
             }
         }
-        let _ = self.graph.graph().walk_ancestors(tx, |_depth, anc_tx| {
-            if unconfirmed_txids.contains(&anc_tx.txid()) {
-                Some(anc_tx)
-            } else {
-                None
-            }
-        });
+        let mut b = graph_update.clone();
+        b.apply_changeset(graph_cs);
+        let _ = self.graph.apply_update(b);
+        //let a = self.graph.graph().walk_conflicts(tx, walk_map)
+        Ok(())
     }
 }
 
@@ -443,8 +432,34 @@ impl Electrum {
         self.bdk_wallet.sync_using_electrum(&self.client)
     }
 
-    pub fn common_ancestor(&self) -> Option<BlockChainTip> {
+    pub fn common_ancestor(&self, tip: &BlockChainTip) -> Option<BlockChainTip> {
         let server_tip_height = self.client.chain_tip().height as u32;
+        let tip_block = BlockId {
+            hash: tip.hash,
+            height: height_u32_from_i32(tip.height),
+        };
+        // Get a local chain that includes all our checkpoints up to and including `tip`.
+        // Typically, the local chain's tip should be the same as `tip`, but the local chain's tip
+        // may have advanced slightly in case the Electrum tip changed while performing a round of
+        // updates and we restarted.
+        let local_chain = {
+            let mut chain = self.bdk_wallet.local_chain.clone();
+            // We want to disconnect all checkpoints *after* `tip`, but `disconnect_from` is inclusive.
+            // So call `disconnect_from` and then re-insert `tip`.
+
+            // We can only get an error if `tip` is the genesis block, but we should never
+            // be trying to find the common ancestor of the genesis block.
+            let _ = chain
+                .disconnect_from(tip_block)
+                .expect("we should not be trying to find common ancestor with genesis block");
+            let _ = chain
+                .insert_block(tip_block)
+                .expect("we have already removed this block from chain");
+            chain
+        };
+        // The following code is based on the function `construct_update_tip`. See:
+        // https://github.com/bitcoindevkit/bdk/blob/4a8452f9b8f8128affbb60665016fedb48f07cd6/crates/electrum/src/electrum_ext.rs#L284
+        // TODO: Is the following comment and code correct in our case? Could the electrum tip be lower and a reorged chain?
 
         // If electrum returns a tip height that is lower than our previous tip, then checkpoints do
         // not need updating. We just return the previous tip and use that as the point of agreement.
@@ -474,9 +489,7 @@ impl Electrum {
         // Find the "point of agreement" (if any).
         let agreement_cp = {
             let mut agreement_cp = Option::<CheckPoint>::None;
-            for cp in self
-                .bdk_wallet
-                .local_chain
+            for cp in local_chain
                 .tip()
                 .iter()
                 .filter(|cp| cp.height() <= server_tip_height)

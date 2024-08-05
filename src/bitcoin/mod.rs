@@ -506,14 +506,10 @@ impl BitcoinInterface for electrum::Electrum {
     fn update_coins(
         &mut self,
         db_conn: &mut Box<dyn DatabaseConnection>,
-        previous_tip: &BlockChainTip,
+        _previous_tip: &BlockChainTip,
         _descs: &[descriptors::SinglePathLianaDesc],
         secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) -> UpdatedCoins {
-        // Make sure `previous_tip` is same as our local tip.
-        let local_tip = self.bdk_wallet.chain_tip();
-        assert_eq!(previous_tip, &local_tip);
-
         self.bdk_wallet.reveal_spks(db_conn);
 
         // All newly received coins.
@@ -530,8 +526,8 @@ impl BitcoinInterface for electrum::Electrum {
         // Any pre-sync coins that are no longer in the wallet.
         let mut expired = Vec::new();
 
-        let pre_sync_coins = &self.bdk_wallet.coins();
-        log::debug!("pre sync coins: {:?}", pre_sync_coins);
+        let db_coins = db_conn.coins(&[], &[]);
+        log::debug!("db coins: {:?}", db_coins);
         // If there was an error, the wallet will not have changed and so there will
         // be no updated coins.
         if let Err(e) = self.sync_wallet() {
@@ -540,27 +536,27 @@ impl BitcoinInterface for electrum::Electrum {
             let wallet_coins = &self.bdk_wallet.coins();
             log::debug!("wallet coins: {:?}", wallet_coins);
             for (w_op, w_c) in wallet_coins {
-                if let Some(pre_c) = pre_sync_coins.get(w_op) {
-                    if pre_c != w_c {
-                        // If `pre_c.block_info.is_some()`, then we can assume the value hasn't changed
+                if let Some(db_c) = db_coins.get(w_op) {
+                    if db_c != w_c {
+                        // If `db_c.block_info.is_some()`, then we can assume the value hasn't changed
                         // as otherwise there must have been a reorg and the DB would have been rolled back.
-                        if pre_c.block_info.is_none() && w_c.block_info.is_some() {
+                        if db_c.block_info.is_none() && w_c.block_info.is_some() {
                             let block = w_c.block_info.expect("already checked");
                             // let height: i32 = block.height.try_into().unwrap();
                             // let time: u32 = block.confirmation_time.try_into().unwrap();
                             confirmed.push((*w_op, block.height, block.time));
                         }
-                        if pre_c.spend_txid != w_c.spend_txid {
-                            if pre_c.spend_txid.is_some() {
+                        if db_c.spend_txid != w_c.spend_txid {
+                            if db_c.spend_txid.is_some() {
                                 expired_spending.push(*w_op);
                             }
                             if let Some(txid) = w_c.spend_txid {
                                 spending.push((*w_op, txid));
                             }
                         }
-                        // If `pre_c.spend_block.is_some()`, then we can assume the value hasn't changed
+                        // If `db_c.spend_block.is_some()`, then we can assume the value hasn't changed
                         // as otherwise there must have been a reorg and the DB would have been rolled back.
-                        if pre_c.spend_block.is_none() && w_c.spend_block.is_some() {
+                        if db_c.spend_block.is_none() && w_c.spend_block.is_some() {
                             let block = w_c.spend_block.expect("already checked");
                             let txid = w_c.spend_txid.expect("must be present if spend confirmed");
                             // let height: i32 = block.confirmation_height.try_into().unwrap();
@@ -593,9 +589,9 @@ impl BitcoinInterface for electrum::Electrum {
                     }
                 }
             }
-            // Any pre-sync coins that are no longer in the wallet.
+            // Any DB coins that are no longer in the wallet.
             expired.extend(
-                pre_sync_coins
+                db_coins
                     .keys()
                     .filter(|c| !wallet_coins.contains_key(c))
                     .cloned(),
@@ -633,10 +629,7 @@ impl BitcoinInterface for electrum::Electrum {
     }
 
     fn common_ancestor(&self, tip: &BlockChainTip) -> Option<BlockChainTip> {
-        // Make sure `tip` is same as our local tip.
-        let local_tip = self.bdk_wallet.chain_tip();
-        assert_eq!(tip, &local_tip);
-        self.common_ancestor()
+        self.common_ancestor(tip)
     }
 
     fn broadcast_tx(&self, tx: &bitcoin::Transaction) -> Result<(), String> {
