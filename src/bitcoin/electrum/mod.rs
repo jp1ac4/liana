@@ -366,8 +366,7 @@ impl BdkWallet {
             .expect("must be greater than unix epoch")
             .as_secs();
 
-        let mut graph_cs = graph_update.initial_changeset();
-        for tx in &graph_cs.txs {
+        for tx in &graph_update.initial_changeset().txs {
             let txid = tx.txid();
             if let Some(ChainPosition::Unconfirmed(last_seen)) = graph_update.get_chain_position(
                 &self.local_chain,
@@ -389,10 +388,9 @@ impl BdkWallet {
                     prev_last_seen,
                     now
                 );
-                graph_cs.last_seen.insert(txid, now);
+                let _ = graph_update.insert_seen_at(txid, now);
             }
         }
-        graph_update.apply_changeset(graph_cs);
         let _ = self.graph.apply_update(graph_update);
         Ok(())
     }
