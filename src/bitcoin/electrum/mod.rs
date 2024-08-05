@@ -304,7 +304,7 @@ impl BdkWallet {
             chain_tip.block_id().height
         );
 
-        let (chain_update, graph_update, keychain_update) = if chain_tip.height() > 0 {
+        let (chain_update, mut graph_update, keychain_update) = if chain_tip.height() > 0 {
             log::info!("Performing sync.");
             let mut request =
                 SyncRequest::from_chain_tip(chain_tip.clone()).cache_graph_txs(self.graph.graph());
@@ -359,6 +359,8 @@ impl BdkWallet {
             .apply_update(chain_update)
             .expect("update connects to local chain");
 
+        // Unconfirmed transactions have their last seen as 0, so we override to the current time
+        // so that conflicts can be properly handled.
         let now = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .expect("must be greater than unix epoch")
@@ -367,20 +369,18 @@ impl BdkWallet {
         let mut graph_cs = graph_update.initial_changeset();
         for tx in &graph_cs.txs {
             let txid = tx.txid();
-            println!("checking txid {}", txid);
+            log::debug!("checking if txid '{}' is unconfirmed", txid);
             if let Some(ChainPosition::Unconfirmed(_u)) = graph_update.get_chain_position(
                 &self.local_chain,
                 self.local_chain.tip().block_id(),
                 txid,
             ) {
-                println!("setting last seen for {} to {}", txid, now);
+                log::debug!("setting last seen for txid '{}' to {}", txid, now);
                 graph_cs.last_seen.insert(txid, now);
             }
         }
-        let mut b = graph_update.clone();
-        b.apply_changeset(graph_cs);
-        let _ = self.graph.apply_update(b);
-        //let a = self.graph.graph().walk_conflicts(tx, walk_map)
+        graph_update.apply_changeset(graph_cs);
+        let _ = self.graph.apply_update(graph_update);
         Ok(())
     }
 }
