@@ -369,13 +369,26 @@ impl BdkWallet {
         let mut graph_cs = graph_update.initial_changeset();
         for tx in &graph_cs.txs {
             let txid = tx.txid();
-            log::debug!("checking if txid '{}' is unconfirmed", txid);
-            if let Some(ChainPosition::Unconfirmed(_u)) = graph_update.get_chain_position(
+            if let Some(ChainPosition::Unconfirmed(last_seen)) = graph_update.get_chain_position(
                 &self.local_chain,
                 self.local_chain.tip().block_id(),
                 txid,
             ) {
-                log::debug!("setting last seen for txid '{}' to {}", txid, now);
+                let prev_last_seen = if let Some(ChainPosition::Unconfirmed(last_seen)) = self
+                    .graph
+                    .graph()
+                    .get_chain_position(&self.local_chain, self.local_chain.tip().block_id(), txid)
+                {
+                    last_seen
+                } else {
+                    last_seen
+                };
+                log::debug!(
+                    "changing last seen for txid '{}' from {} to {}",
+                    txid,
+                    prev_last_seen,
+                    now
+                );
                 graph_cs.last_seen.insert(txid, now);
             }
         }
