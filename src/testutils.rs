@@ -64,6 +64,14 @@ impl BitcoinInterface for DummyBitcoind {
         true
     }
 
+    fn sync_wallet(
+        &mut self,
+        _receive_index: bip32::ChildNumber,
+        _change_index: bip32::ChildNumber,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
     fn received_coins(
         &self,
         _: &BlockChainTip,
