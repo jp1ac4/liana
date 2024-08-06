@@ -239,7 +239,7 @@ fn new_tip(bit: &impl BitcoinInterface, current_tip: &BlockChainTip) -> TipUpdat
 
 fn updates(
     db_conn: &mut Box<dyn DatabaseConnection>,
-    bit: &impl BitcoinInterface,
+    bit: &mut impl BitcoinInterface,
     descs: &[descriptors::SinglePathLianaDesc],
     secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
 ) {
@@ -257,6 +257,11 @@ fn updates(
         }
     };
 
+    let (receive_index, change_index) = (db_conn.receive_index(), db_conn.change_index());
+    if let Err(e) = bit.sync_wallet(receive_index, change_index) {
+        log::error!("Error syncing wallet: '{}'.", e);
+        return updates(db_conn, bit, descs, secp);
+    };
     // Then check the state of our coins. Do it even if the tip did not change since last poll, as
     // we may have unconfirmed transactions.
     let updated_coins = update_coins(bit, db_conn, &current_tip, descs, secp);
@@ -289,7 +294,7 @@ fn updates(
 // Check if there is any rescan of the backend ongoing or one that just finished.
 fn rescan_check(
     db_conn: &mut Box<dyn DatabaseConnection>,
-    bit: &impl BitcoinInterface,
+    bit: &mut impl BitcoinInterface,
     descs: &[descriptors::SinglePathLianaDesc],
     secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
 ) {
@@ -356,7 +361,7 @@ pub fn sync_poll_interval() -> time::Duration {
 
 /// Update our state from the Bitcoin backend.
 pub fn poll(
-    bit: &sync::Arc<sync::Mutex<dyn BitcoinInterface>>,
+    bit: &mut sync::Arc<sync::Mutex<dyn BitcoinInterface>>,
     db: &sync::Arc<sync::Mutex<dyn DatabaseInterface>>,
     secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     descs: &[descriptors::SinglePathLianaDesc],
