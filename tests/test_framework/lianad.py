@@ -1,3 +1,4 @@
+import abc
 import logging
 import os
 import shutil
@@ -22,14 +23,40 @@ from test_framework.serializations import (
 )
 
 
+class BitcoindBackendConfig(abc.ABC):
+    @abc.abstractmethod
+    def append_to_conf(self, conf_file): ...
+
+
+class BitcoindConfig(BitcoindBackendConfig):
+    def __init__(self, rpc_port, cookie_path):
+        self.rpc_port = rpc_port
+        self.cookie_path = cookie_path
+
+    def append_to_conf(self, conf_file):
+        with open(conf_file, "a") as f:
+            f.write("[bitcoind_config]\n")
+            f.write(f"cookie_path = '{self.cookie_path}'\n")
+            f.write(f"addr = '127.0.0.1:{self.rpc_port}'\n")
+
+
+class ElectrumConfig(BitcoindBackendConfig):
+    def __init__(self, rpc_port):
+        self.rpc_port = rpc_port
+
+    def append_to_conf(self, conf_file):
+        with open(conf_file, "a") as f:
+            f.write("[electrum_config]\n")
+            f.write(f"addr = '127.0.0.1:{self.rpc_port}'\n")
+
+
 class Lianad(TailableProc):
     def __init__(
         self,
         datadir,
         signer,
         multi_desc,
-        bitcoind_rpc_port,
-        bitcoind_cookie_path,
+        backend_config,
     ):
         TailableProc.__init__(self, datadir, verbose=VERBOSE)
 
@@ -55,10 +82,7 @@ class Lianad(TailableProc):
             f.write("[bitcoin_config]\n")
             f.write('network = "regtest"\n')
             f.write("poll_interval_secs = 1\n")
-
-            f.write("[bitcoind_config]\n")
-            f.write(f"cookie_path = '{bitcoind_cookie_path}'\n")
-            f.write(f"addr = '127.0.0.1:{bitcoind_rpc_port}'\n")
+        backend_config.append_to_conf(self.conf_file)
 
     def finalize_psbt(self, psbt):
         """Create a valid witness for all inputs in the PSBT.

@@ -3,9 +3,10 @@ from bip32.utils import _pubkey_to_fingerprint
 from bip380.descriptors import Descriptor
 from concurrent import futures
 from test_framework.bitcoind import Bitcoind
-from test_framework.lianad import Lianad
+from test_framework.electrum import Electrum
+from test_framework.lianad import BitcoindConfig, ElectrumConfig, Lianad
 from test_framework.signer import SingleSigner, MultiSigner
-from test_framework.utils import EXECUTOR_WORKERS, USE_TAPROOT
+from test_framework.utils import BITCOIN_BACKEND_TYPE, EXECUTOR_WORKERS, USE_TAPROOT
 
 import hashlib
 import os
@@ -115,6 +116,41 @@ def bitcoind(directory):
     bitcoind.cleanup()
 
 
+@pytest.fixture
+def bitcoin_backend(directory, bitcoind):
+    # bitcoind = Bitcoind(bitcoin_dir=os.path.join(directory, "bitcoind"))
+    # bitcoind.startup()
+
+    # bitcoind.rpc.createwallet(
+    #     bitcoind.rpc.wallet_name, False, False, "", False, True, True
+    # )
+
+    # bitcoind.rpc.generatetoaddress(101, bitcoind.rpc.getnewaddress())
+    # while bitcoind.rpc.getbalance() < 50:
+    #     time.sleep(0.01)
+
+    if BITCOIN_BACKEND_TYPE == "electrum":
+        electrum = Electrum(
+            electrum_dir=os.path.join(directory, "electrum"), bitcoind=bitcoind
+        )
+        electrum.startup()
+        yield electrum
+        electrum.cleanup()
+    else:
+        yield bitcoind
+        bitcoind.cleanup()
+
+
+# @pytest.fixture
+# def electrum(directory, bitcoind):
+#     electrum = Electrum(electrum_dir=os.path.join(directory, "electrum"), bitcoind=bitcoind)
+#     electrum.startup()
+
+#     yield electrum
+
+#     electrum.cleanup()
+
+
 def xpub_fingerprint(hd):
     return _pubkey_to_fingerprint(hd.pubkey).hex()
 
@@ -127,10 +163,10 @@ def single_key_desc(prim_fg, prim_xpub, reco_fg, reco_xpub, csv_value, is_taproo
 
 
 @pytest.fixture
-def lianad(bitcoind, directory):
+def lianad(bitcoin_backend, directory):
     datadir = os.path.join(directory, "lianad")
     os.makedirs(datadir, exist_ok=True)
-    bitcoind_cookie = os.path.join(bitcoind.bitcoin_dir, "regtest", ".cookie")
+    bitcoind_cookie = os.path.join(directory, "bitcoind", "regtest", ".cookie")
 
     signer = SingleSigner(is_taproot=USE_TAPROOT)
     (prim_fingerprint, primary_xpub), (reco_fingerprint, recovery_xpub) = (
@@ -151,12 +187,23 @@ def lianad(bitcoind, directory):
         )
     )
 
+    backend_config = None
+    # electrum = None
+    if BITCOIN_BACKEND_TYPE == "electrum":
+        # electrum = Electrum(
+        #     electrum_dir=os.path.join(directory, "electrum"), bitcoind=bitcoind
+        # )
+        # electrum.startup()
+        backend_config = ElectrumConfig(bitcoin_backend.rpcport)
+
+    if backend_config is None:
+        backend_config = BitcoindConfig(bitcoin_backend.rpcport, bitcoind_cookie)
+
     lianad = Lianad(
         datadir,
         signer,
         main_desc,
-        bitcoind.rpcport,
-        bitcoind_cookie,
+        backend_config,
     )
 
     try:
@@ -166,6 +213,8 @@ def lianad(bitcoind, directory):
         lianad.cleanup()
         raise
 
+    # if electrum is not None:
+    #     electrum.cleanup()
     lianad.cleanup()
 
 
@@ -208,10 +257,10 @@ def multisig_desc(multi_signer, csv_value, is_taproot):
 
 
 @pytest.fixture
-def lianad_multisig(bitcoind, directory):
+def lianad_multisig(bitcoin_backend, directory):
     datadir = os.path.join(directory, "lianad")
     os.makedirs(datadir, exist_ok=True)
-    bitcoind_cookie = os.path.join(bitcoind.bitcoin_dir, "regtest", ".cookie")
+    bitcoind_cookie = os.path.join(directory, "bitcoind", "regtest", ".cookie")
 
     # A 3-of-4 that degrades into a 2-of-5 after 10 blocks
     csv_value = 10
@@ -220,12 +269,23 @@ def lianad_multisig(bitcoind, directory):
         multisig_desc(signer, csv_value, is_taproot=USE_TAPROOT)
     )
 
+    backend_config = None
+    # electrum = None
+    if BITCOIN_BACKEND_TYPE == "electrum":
+        # electrum = Electrum(
+        #     electrum_dir=os.path.join(directory, "electrum"), bitcoind=bitcoind
+        # )
+        # electrum.startup()
+        backend_config = ElectrumConfig(bitcoin_backend.rpcport)
+
+    if backend_config is None:
+        backend_config = BitcoindConfig(bitcoin_backend.rpcport, bitcoind_cookie)
+
     lianad = Lianad(
         datadir,
         signer,
         main_desc,
-        bitcoind.rpcport,
-        bitcoind_cookie,
+        backend_config,
     )
 
     try:
