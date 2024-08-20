@@ -30,7 +30,14 @@ from test_framework.utils import TailableProc, wait_for, TIMEOUT, ELECTRUM_PATH,
 
 
 class Electrum(TailableProc):
-    def __init__(self, bitcoind_dir, bitcoind_rpcport, bitcoind_p2pport, electrum_dir, rpcport=None):
+    def __init__(
+        self,
+        bitcoind_dir,
+        bitcoind_rpcport,
+        bitcoind_p2pport,
+        electrum_dir,
+        rpcport=None,
+    ):
         TailableProc.__init__(self, electrum_dir, verbose=False)
 
         if rpcport is None:
@@ -55,9 +62,7 @@ class Electrum(TailableProc):
         ]
         electrum_conf = {
             "daemon_dir": bitcoind_dir,
-            "cookie_file": os.path.join(
-                bitcoind_dir, "regtest", ".cookie"
-            ),
+            "cookie_file": os.path.join(bitcoind_dir, "regtest", ".cookie"),
             "daemon_rpc_addr": f"127.0.0.1:{bitcoind_rpcport}",
             "daemon_p2p_addr": f"127.0.0.1:{bitcoind_p2pport}",
             "db_dir": electrum_dir,

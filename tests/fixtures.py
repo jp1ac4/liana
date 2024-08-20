@@ -131,8 +131,10 @@ def bitcoin_backend(directory, bitcoind):
 
     if BITCOIN_BACKEND_TYPE == "electrum":
         electrum = Electrum(
-            electrum_dir=os.path.join(directory, "electrum"), bitcoind_dir=bitcoind.bitcoin_dir,
-            bitcoind_rpcport=bitcoind.rpcport, bitcoind_p2pport=bitcoind.p2pport,
+            electrum_dir=os.path.join(directory, "electrum"),
+            bitcoind_dir=bitcoind.bitcoin_dir,
+            bitcoind_rpcport=bitcoind.rpcport,
+            bitcoind_p2pport=bitcoind.p2pport,
         )
         electrum.start()
         yield electrum

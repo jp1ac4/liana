@@ -193,6 +193,9 @@ def test_reorg_status_recovery(lianad, bitcoind):
     assert new_coin_b == coin_b
 
 
+@pytest.mark.skipif(
+    BITCOIN_BACKEND_TYPE == "electrum", reason="Rescan not currently implemented."
+)
 def test_rescan_edge_cases(lianad, bitcoind):
     """Test some specific cases that could arise when rescanning the chain."""
     initial_tip = bitcoind.rpc.getblockheader(bitcoind.rpc.getbestblockhash())
@@ -329,6 +332,9 @@ def test_deposit_replacement(lianad, bitcoind):
     wait_for(lambda: len(lianad.rpc.listcoins()["coins"]) == 1)
 
 
+@pytest.mark.skipif(
+    BITCOIN_BACKEND_TYPE == "electrum", reason="Rescan not currently implemented."
+)
 def test_rescan_and_recovery(lianad, bitcoind):
     """Test user recovery flow"""
     # Get initial_tip to use for rescan later
