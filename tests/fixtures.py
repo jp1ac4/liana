@@ -131,9 +131,10 @@ def bitcoin_backend(directory, bitcoind):
 
     if BITCOIN_BACKEND_TYPE == "electrum":
         electrum = Electrum(
-            electrum_dir=os.path.join(directory, "electrum"), bitcoind=bitcoind
+            electrum_dir=os.path.join(directory, "electrum"), bitcoind_dir=bitcoind.bitcoin_dir,
+            bitcoind_rpcport=bitcoind.rpcport, bitcoind_p2pport=bitcoind.p2pport,
         )
-        electrum.startup()
+        electrum.start()
         yield electrum
         electrum.cleanup()
     else:
@@ -321,10 +322,10 @@ def multipath_desc(multi_signer, csv_values, is_taproot):
 
 
 @pytest.fixture
-def lianad_multipath(bitcoind, directory):
+def lianad_multipath(bitcoin_backend, directory):
     datadir = os.path.join(directory, "lianad")
     os.makedirs(datadir, exist_ok=True)
-    bitcoind_cookie = os.path.join(bitcoind.bitcoin_dir, "regtest", ".cookie")
+    bitcoind_cookie = os.path.join(directory, "bitcoind", "regtest", ".cookie")
 
     # A 3-of-4 that degrades into a 3-of-5 after 10 blocks and into a 1-of-10 after 20 blocks.
     csv_values = [10, 20]
@@ -335,12 +336,23 @@ def lianad_multipath(bitcoind, directory):
         multipath_desc(signer, csv_values, is_taproot=USE_TAPROOT)
     )
 
+    backend_config = None
+    # electrum = None
+    if BITCOIN_BACKEND_TYPE == "electrum":
+        # electrum = Electrum(
+        #     electrum_dir=os.path.join(directory, "electrum"), bitcoind=bitcoind
+        # )
+        # electrum.startup()
+        backend_config = ElectrumConfig(bitcoin_backend.rpcport)
+
+    if backend_config is None:
+        backend_config = BitcoindConfig(bitcoin_backend.rpcport, bitcoind_cookie)
+
     lianad = Lianad(
         datadir,
         signer,
         main_desc,
-        bitcoind.rpcport,
-        bitcoind_cookie,
+        backend_config,
     )
 
     try:

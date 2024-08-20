@@ -30,7 +30,7 @@ from test_framework.utils import TailableProc, wait_for, TIMEOUT, ELECTRUM_PATH,
 
 
 class Electrum(TailableProc):
-    def __init__(self, bitcoind, electrum_dir, rpcport=None):
+    def __init__(self, bitcoind_dir, bitcoind_rpcport, bitcoind_p2pport, electrum_dir, rpcport=None):
         TailableProc.__init__(self, electrum_dir, verbose=False)
 
         if rpcport is None:
@@ -40,8 +40,6 @@ class Electrum(TailableProc):
         self.rpcport = rpcport
         # self.p2pport = reserve()
         # self.prefix = "electrum"
-
-        self.bitcoind = bitcoind
         # self.bitcoin_rpcport = bitcoind.rpcport
         # self.bitcoin_p2pport = bitcoind.p2pport
         # self.bitcoin_dir = bitcoind.bitcoin_dir
@@ -56,12 +54,12 @@ class Electrum(TailableProc):
             "{}/electrs.toml".format(regtestdir),
         ]
         electrum_conf = {
-            "daemon_dir": self.bitcoind.bitcoin_dir,
+            "daemon_dir": bitcoind_dir,
             "cookie_file": os.path.join(
-                self.bitcoind.bitcoin_dir, "regtest", ".cookie"
+                bitcoind_dir, "regtest", ".cookie"
             ),
-            "daemon_rpc_addr": f"127.0.0.1:{self.bitcoind.rpcport}",
-            "daemon_p2p_addr": f"127.0.0.1:{self.bitcoind.p2pport}",
+            "daemon_rpc_addr": f"127.0.0.1:{bitcoind_rpcport}",
+            "daemon_p2p_addr": f"127.0.0.1:{bitcoind_p2pport}",
             "db_dir": electrum_dir,
             "network": "regtest",
             "electrum_rpc_addr": f"127.0.0.1:{self.rpcport}",
@@ -95,8 +93,7 @@ class Electrum(TailableProc):
         #     )
 
     def stop(self):
-        TailableProc.stop(self)
-        return self.bitcoind.stop()
+        return TailableProc.stop(self)
 
     def cleanup(self):
         try:

@@ -605,6 +605,9 @@ def test_broadcast_spend(lianad, bitcoind):
     lianad.rpc.broadcastspend(txid)
 
 
+@pytest.mark.skipif(
+    BITCOIN_BACKEND_TYPE == "electrum", reason="Rescan not currently implemented."
+)
 def test_start_rescan(lianad, bitcoind):
     """Test we successfully retrieve all our transactions after losing state by rescanning."""
     initial_timestamp = int(time.time())
