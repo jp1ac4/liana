@@ -58,6 +58,9 @@ pub trait BitcoinInterface: Send {
     /// Check whether this former tip is part of the current best chain.
     fn is_in_chain(&self, tip: &BlockChainTip) -> bool;
 
+    /// Roll back the wallet tip to a previous block that already exists in the wallet.
+    fn rollback_wallet_tip(&mut self, new_tip: &BlockChainTip);
+
     /// Sync the wallet with the current best chain.
     /// `receive_index` and `change_index` are the last derivation indices
     /// that are expected to have been used by the wallet.
@@ -165,6 +168,8 @@ impl BitcoinInterface for d::BitcoinD {
             .map(|bh| bh == tip.hash)
             .unwrap_or(false)
     }
+
+    fn rollback_wallet_tip(&mut self, _new_tip: &BlockChainTip) {}
 
     // The watchonly wallet handles this for us.
     fn sync_wallet(
@@ -426,6 +431,10 @@ impl BitcoinInterface for sync::Arc<sync::Mutex<dyn BitcoinInterface + 'static>>
 
     fn is_in_chain(&self, tip: &BlockChainTip) -> bool {
         self.lock().unwrap().is_in_chain(tip)
+    }
+
+    fn rollback_wallet_tip(&mut self, new_tip: &BlockChainTip) {
+        self.lock().unwrap().rollback_wallet_tip(new_tip)
     }
 
     fn sync_wallet(

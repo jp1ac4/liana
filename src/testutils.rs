@@ -64,6 +64,8 @@ impl BitcoinInterface for DummyBitcoind {
         true
     }
 
+    fn rollback_wallet_tip(&mut self, _new_tip: &BlockChainTip) {}
+
     fn sync_wallet(
         &mut self,
         _receive_index: bip32::ChildNumber,

@@ -252,6 +252,7 @@ fn updates(
             // The block chain was reorganized. Rollback our state down to the common ancestor
             // between our former chain and the new one, then restart fresh.
             db_conn.rollback_tip(&new_tip);
+            bit.rollback_wallet_tip(&new_tip);
             log::info!("Tip was rolled back to '{}'.", new_tip);
             return updates(db_conn, bit, descs, secp);
         }
