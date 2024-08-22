@@ -22,7 +22,6 @@ DEFAULT_MS_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "target/debug/lianad"
 )
 LIANAD_PATH = os.getenv("LIANAD_PATH", DEFAULT_MS_PATH)
-DEFAULT_BITCOIN_BACKEND_TYPE = "bitcoind"
 
 
 class BitcoinBackendType(str, enum.Enum):
@@ -36,6 +35,7 @@ class BitcoinBackendType(str, enum.Enum):
             return False
 
 
+DEFAULT_BITCOIN_BACKEND_TYPE = "bitcoind"
 BITCOIN_BACKEND_TYPE = BitcoinBackendType(
     os.getenv("BITCOIN_BACKEND_TYPE", DEFAULT_BITCOIN_BACKEND_TYPE)
 )
