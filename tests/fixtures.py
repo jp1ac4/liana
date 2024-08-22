@@ -118,18 +118,11 @@ def bitcoind(directory):
 
 @pytest.fixture
 def bitcoin_backend(directory, bitcoind):
-    # bitcoind = Bitcoind(bitcoin_dir=os.path.join(directory, "bitcoind"))
-    # bitcoind.startup()
 
-    # bitcoind.rpc.createwallet(
-    #     bitcoind.rpc.wallet_name, False, False, "", False, True, True
-    # )
-
-    # bitcoind.rpc.generatetoaddress(101, bitcoind.rpc.getnewaddress())
-    # while bitcoind.rpc.getbalance() < 50:
-    #     time.sleep(0.01)
-
-    if BITCOIN_BACKEND_TYPE == "electrum":
+    if BITCOIN_BACKEND_TYPE is BitcoinBackendType.Bitcoind:
+        yield bitcoind
+        bitcoind.cleanup()
+    elif BITCOIN_BACKEND_TYPE is BitcoinBackendType.Electrum:
         electrum = Electrum(
             electrum_dir=os.path.join(directory, "electrum"),
             bitcoind_dir=bitcoind.bitcoin_dir,
@@ -140,18 +133,7 @@ def bitcoin_backend(directory, bitcoind):
         yield electrum
         electrum.cleanup()
     else:
-        yield bitcoind
-        bitcoind.cleanup()
-
-
-# @pytest.fixture
-# def electrum(directory, bitcoind):
-#     electrum = Electrum(electrum_dir=os.path.join(directory, "electrum"), bitcoind=bitcoind)
-#     electrum.startup()
-
-#     yield electrum
-
-#     electrum.cleanup()
+        raise NotImplementedError
 
 
 def xpub_fingerprint(hd):
@@ -190,18 +172,6 @@ def lianad(bitcoin_backend, directory):
         )
     )
 
-    # backend_config = None
-    # # electrum = None
-    # if BITCOIN_BACKEND_TYPE == "electrum":
-    #     # electrum = Electrum(
-    #     #     electrum_dir=os.path.join(directory, "electrum"), bitcoind=bitcoind
-    #     # )
-    #     # electrum.startup()
-    #     backend_config = ElectrumConfig(bitcoin_backend.rpcport)
-
-    # if backend_config is None:
-    #     backend_config = BitcoindConfig(bitcoin_backend.rpcport, bitcoind_cookie)
-
     lianad = Lianad(
         datadir,
         signer,
@@ -216,8 +186,6 @@ def lianad(bitcoin_backend, directory):
         lianad.cleanup()
         raise
 
-    # if electrum is not None:
-    #     electrum.cleanup()
     lianad.cleanup()
 
 
@@ -272,18 +240,6 @@ def lianad_multisig(bitcoin_backend, directory):
         multisig_desc(signer, csv_value, is_taproot=USE_TAPROOT)
     )
 
-    # backend_config = None
-    # # electrum = None
-    # if BITCOIN_BACKEND_TYPE == "electrum":
-    #     # electrum = Electrum(
-    #     #     electrum_dir=os.path.join(directory, "electrum"), bitcoind=bitcoind
-    #     # )
-    #     # electrum.startup()
-    #     backend_config = ElectrumConfig(bitcoin_backend.rpcport)
-
-    # if backend_config is None:
-    #     backend_config = BitcoindConfig(bitcoin_backend.rpcport, bitcoind_cookie)
-
     lianad = Lianad(
         datadir,
         signer,
@@ -337,18 +293,6 @@ def lianad_multipath(bitcoin_backend, directory):
     main_desc = Descriptor.from_str(
         multipath_desc(signer, csv_values, is_taproot=USE_TAPROOT)
     )
-
-    # backend_config = None
-    # # electrum = None
-    # if BITCOIN_BACKEND_TYPE == "electrum":
-    #     # electrum = Electrum(
-    #     #     electrum_dir=os.path.join(directory, "electrum"), bitcoind=bitcoind
-    #     # )
-    #     # electrum.startup()
-    #     backend_config = ElectrumConfig(bitcoin_backend.rpcport)
-
-    # if backend_config is None:
-    #     backend_config = BitcoindConfig(bitcoin_backend.rpcport, bitcoind_cookie)
 
     lianad = Lianad(
         datadir,

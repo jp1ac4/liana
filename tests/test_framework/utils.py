@@ -445,5 +445,9 @@ class TailableProc(object):
 
 
 class BitcoinBackend(abc.ABC, TailableProc):
+    """All Bitcoin backends should derive from this class."""
+
     @abc.abstractmethod
-    def append_to_conf(self, conf_file): ...
+    def append_to_lianad_conf(self, conf_file):
+        """Append backend config values to lianad config file."""
+        ...
