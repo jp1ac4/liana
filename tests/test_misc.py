@@ -7,6 +7,8 @@ from fixtures import *
 from test_framework.authproxy import JSONRPCException
 from test_framework.serializations import PSBT
 from test_framework.utils import (
+    BitcoinBackendType,
+    BITCOIN_BACKEND_TYPE,
     wait_for,
     RpcError,
     OLD_LIANAD_PATH,
@@ -314,6 +316,10 @@ def bitcoind_wait_new_block(bitcoind):
 
 @pytest.mark.skipif(
     not IS_NOT_BITCOIND_24, reason="Need 'generateblock' with 'submit=False'"
+)
+# TODO: Should this test work for Electrum?
+@pytest.mark.skipif(
+    BITCOIN_BACKEND_TYPE is not BitcoinBackendType.Bitcoind, reason="FIXME"
 )
 def test_retry_on_workqueue_exceeded(lianad, bitcoind, executor):
     """Make sure we retry requests to bitcoind if it is temporarily overloaded."""

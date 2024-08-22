@@ -134,7 +134,7 @@ def bitcoin_backend(directory, bitcoind):
             bitcoind_rpcport=bitcoind.rpcport,
             bitcoind_p2pport=bitcoind.p2pport,
         )
-        electrum.start()
+        electrum.startup()
         yield electrum
         electrum.cleanup()
     else:
