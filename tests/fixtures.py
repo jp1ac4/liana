@@ -4,9 +4,14 @@ from bip380.descriptors import Descriptor
 from concurrent import futures
 from test_framework.bitcoind import Bitcoind
 from test_framework.electrum import Electrum
-from test_framework.lianad import BitcoindConfig, ElectrumConfig, Lianad
+from test_framework.lianad import Lianad
 from test_framework.signer import SingleSigner, MultiSigner
-from test_framework.utils import BITCOIN_BACKEND_TYPE, EXECUTOR_WORKERS, USE_TAPROOT
+from test_framework.utils import (
+    BITCOIN_BACKEND_TYPE,
+    EXECUTOR_WORKERS,
+    USE_TAPROOT,
+    BitcoinBackendType,
+)
 
 import hashlib
 import os
