@@ -194,7 +194,7 @@ def test_reorg_status_recovery(lianad, bitcoind):
 
 
 @pytest.mark.skipif(
-    BITCOIN_BACKEND_TYPE == "electrum", reason="Rescan not currently implemented."
+    not BITCOIN_BACKEND_TYPE.has_rescan(), reason="Rescan not applicable."
 )
 def test_rescan_edge_cases(lianad, bitcoind):
     """Test some specific cases that could arise when rescanning the chain."""
@@ -333,7 +333,7 @@ def test_deposit_replacement(lianad, bitcoind):
 
 
 @pytest.mark.skipif(
-    BITCOIN_BACKEND_TYPE == "electrum", reason="Rescan not currently implemented."
+    not BITCOIN_BACKEND_TYPE.has_rescan(), reason="Rescan not applicable."
 )
 def test_rescan_and_recovery(lianad, bitcoind):
     """Test user recovery flow"""

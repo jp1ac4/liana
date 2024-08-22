@@ -1,35 +1,11 @@
-import hashlib
 import logging
 import os
-import socket
-import time
 
-from decimal import Decimal
 from ephemeral_port_reserve import reserve
-from test_framework.authproxy import AuthServiceProxy
-from test_framework.utils import TailableProc, wait_for, TIMEOUT, ELECTRUM_PATH, COIN
+from test_framework.utils import BitcoinBackend, TailableProc, ELECTRUM_PATH
 
 
-# class ElectrumRpcInterface:
-#     def __init__(self, rpc_port):
-#         self.rpc_port = rpc_port
-
-#     def __getattr__(self, name):
-#         assert not (name.startswith("__") and name.endswith("__")), "Python internals"
-
-#         service_url = f"http://localhost:{self.rpc_port}"
-#         proxy = AuthServiceProxy(service_url, name)
-
-#         def f(*args):
-#             return proxy.__call__(*args)
-
-#         # Make debuggers show <function electrum.rpc.name> rather than <function
-#         # electrum.rpc.<lambda>>
-#         f.__name__ = name
-#         return f
-
-
-class Electrum(TailableProc):
+class Electrum(BitcoinBackend):
     def __init__(
         self,
         bitcoind_dir,
@@ -45,11 +21,6 @@ class Electrum(TailableProc):
 
         self.electrum_dir = electrum_dir
         self.rpcport = rpcport
-        # self.p2pport = reserve()
-        # self.prefix = "electrum"
-        # self.bitcoin_rpcport = bitcoind.rpcport
-        # self.bitcoin_p2pport = bitcoind.p2pport
-        # self.bitcoin_dir = bitcoind.bitcoin_dir
 
         regtestdir = os.path.join(electrum_dir, "regtest")
         if not os.path.exists(regtestdir):
@@ -74,12 +45,8 @@ class Electrum(TailableProc):
             for k, v in electrum_conf.items():
                 f.write(f'{k} = "{v}"\n')
 
-        # self.rpc = ElectrumRpcInterface(rpcport)
-
     def start(self):
-        # self.bitcoind.start()
         TailableProc.start(self)
-        # self.wait_for_log("waiting", timeout=TIMEOUT)
         logging.info("Electrum started")
 
     def startup(self):
@@ -88,14 +55,6 @@ class Electrum(TailableProc):
         except Exception:
             self.stop()
             raise
-
-        # info = self.rpc.getnetworkinfo()
-        # if info["version"] < 220000:
-        #     self.rpc.stop()
-        #     raise ValueError(
-        #         "bitcoind is too old. Minimum supported version is 0.22.0."
-        #         " Current is {}".format(info["version"])
-        #     )
 
     def stop(self):
         return TailableProc.stop(self)
@@ -106,3 +65,8 @@ class Electrum(TailableProc):
         except Exception:
             self.proc.kill()
         self.proc.wait()
+
+    def append_to_conf(self, conf_file):
+        with open(conf_file, "a") as f:
+            f.write("[electrum_config]\n")
+            f.write(f"addr = '127.0.0.1:{self.rpcport}'\n")

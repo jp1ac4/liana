@@ -1,3 +1,5 @@
+import abc
+import enum
 import itertools
 import json
 import logging
@@ -21,7 +23,22 @@ DEFAULT_MS_PATH = os.path.join(
 )
 LIANAD_PATH = os.getenv("LIANAD_PATH", DEFAULT_MS_PATH)
 DEFAULT_BITCOIN_BACKEND_TYPE = "bitcoind"
-BITCOIN_BACKEND_TYPE = os.getenv("BITCOIN_BACKEND_TYPE", DEFAULT_BITCOIN_BACKEND_TYPE)
+
+
+class BitcoinBackendType(str, enum.Enum):
+    Bitcoind = "bitcoind"
+    Electrum = "electrum"
+
+    def has_rescan(self):
+        if self is BitcoinBackendType.Bitcoind:
+            return True
+        if self is BitcoinBackendType.Electrum:
+            return False
+
+
+BITCOIN_BACKEND_TYPE = BitcoinBackendType(
+    os.getenv("BITCOIN_BACKEND_TYPE", DEFAULT_BITCOIN_BACKEND_TYPE)
+)
 DEFAULT_BITCOIND_PATH = "bitcoind"
 BITCOIND_PATH = os.getenv("BITCOIND_PATH", DEFAULT_BITCOIND_PATH)
 DEFAULT_ELECTRUM_PATH = "electrs"
@@ -425,3 +442,8 @@ class TailableProc(object):
         Convenience wrapper for the common case of only seeking a single entry.
         """
         return self.wait_for_logs([regex], timeout)
+
+
+class BitcoinBackend(abc.ABC, TailableProc):
+    @abc.abstractmethod
+    def append_to_conf(self, conf_file): ...

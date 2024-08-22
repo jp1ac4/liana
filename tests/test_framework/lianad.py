@@ -56,7 +56,7 @@ class Lianad(TailableProc):
         datadir,
         signer,
         multi_desc,
-        backend_config,
+        bitcoin_backend,
     ):
         TailableProc.__init__(self, datadir, verbose=VERBOSE)
 
@@ -82,7 +82,7 @@ class Lianad(TailableProc):
             f.write("[bitcoin_config]\n")
             f.write('network = "regtest"\n')
             f.write("poll_interval_secs = 1\n")
-        backend_config.append_to_conf(self.conf_file)
+        bitcoin_backend.append_to_conf(self.conf_file)
 
     def finalize_psbt(self, psbt):
         """Create a valid witness for all inputs in the PSBT.
