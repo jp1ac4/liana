@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use bdk_electrum::bdk_chain::{
     bitcoin::{self, bip32::ChildNumber, BlockHash, OutPoint},
@@ -43,6 +43,9 @@ impl std::fmt::Display for ElectrumError {
 pub struct Electrum {
     client: client::Client,
     bdk_wallet: wallet::BdkWallet,
+    /// Used for setting the `last_seen` of unconfirmed transactions in a strictly
+    /// increasing manner.
+    sync_count: u64,
 }
 
 impl Electrum {
@@ -50,7 +53,11 @@ impl Electrum {
         client: client::Client,
         bdk_wallet: wallet::BdkWallet,
     ) -> Result<Self, ElectrumError> {
-        Ok(Self { client, bdk_wallet })
+        Ok(Self {
+            client,
+            bdk_wallet,
+            sync_count: 0,
+        })
     }
 
     pub fn sanity_checks(&self, expected_hash: &bitcoin::BlockHash) -> Result<(), ElectrumError> {
@@ -74,8 +81,10 @@ impl Electrum {
         self.bdk_wallet.local_chain()
     }
 
+    /// Get all coins stored in the wallet, taking into consideration only those unconfirmed
+    /// transactions that were seen in the last wallet sync.
     pub fn wallet_coins(&self, outpoints: Option<&[OutPoint]>) -> HashMap<OutPoint, Coin> {
-        self.bdk_wallet.coins(outpoints)
+        self.bdk_wallet.coins(outpoints, Some(self.sync_count))
     }
 
     pub fn rollback_wallet_tip(&mut self, new_tip: &BlockChainTip) {
@@ -170,19 +179,16 @@ impl Electrum {
                 return Ok(());
             }
         }
+        // No reorg detected, so we increment the sync count and apply changes.
+        self.sync_count = self.sync_count.checked_add(1).expect("must fit");
         if let Some(keychain_update) = keychain_update {
             self.bdk_wallet.apply_keychain_update(keychain_update);
         }
         self.bdk_wallet.apply_connected_chain_update(chain_update);
 
-        // Unconfirmed transactions have their last seen as 0, so we override to the current time
-        // so that conflicts can be properly handled.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .expect("must be greater than unix epoch")
-            .as_secs();
-
-        let mut unconfirmed_txids = HashSet::new();
+        // Unconfirmed transactions have their last seen as 0, so we override to the `sync_count`
+        // so that conflicts can be properly handled. We use `sync_count` instead of current time
+        // in seconds to ensure strictly increasing values between poller iterations.
         for tx in &graph_update.initial_changeset().txs {
             let txid = tx.txid();
             if let Some(ChainPosition::Unconfirmed(_)) = graph_update.get_chain_position(
@@ -190,13 +196,15 @@ impl Electrum {
                 self.local_chain().tip().block_id(),
                 txid,
             ) {
-                unconfirmed_txids.insert(txid);
-                log::debug!("changing last seen for txid '{}' to {}", txid, now);
-                let _ = graph_update.insert_seen_at(txid, now);
+                log::debug!(
+                    "changing last seen for txid '{}' to {}",
+                    txid,
+                    self.sync_count
+                );
+                let _ = graph_update.insert_seen_at(txid, self.sync_count);
             }
         }
         self.bdk_wallet.apply_graph_update(graph_update);
-        self.bdk_wallet.set_unconfirmed_txids(unconfirmed_txids);
         Ok(())
     }
 

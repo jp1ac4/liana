@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     convert::TryInto,
     sync::Arc,
 };
@@ -37,8 +37,6 @@ pub struct BdkWallet {
     // Store descriptors for use when getting SPKs.
     receive_desc: Descriptor<DescriptorPublicKey>,
     change_desc: Descriptor<DescriptorPublicKey>,
-    /// Unconfirmed txids seen in last sync. Used to identify those in `graph` that have expired.
-    unconfirmed_txids: HashSet<bitcoin::Txid>,
 }
 
 impl BdkWallet {
@@ -76,7 +74,6 @@ impl BdkWallet {
             local_chain,
             receive_desc: receive_desc.clone(),
             change_desc: change_desc.clone(),
-            unconfirmed_txids: HashSet::new(),
         };
         if let Some(tip) = tip {
             // This will be our anchor for any confirmed transactions.
@@ -190,7 +187,13 @@ impl BdkWallet {
     /// Get the coins currently stored by the `BdkWallet` optionally filtered by `outpoints`.
     /// If `outpoints` is `None`, no filter will be applied.
     /// If `outpoints` is an empty slice, no coins will be returned.
-    pub fn coins(&self, outpoints: Option<&[bitcoin::OutPoint]>) -> HashMap<OutPoint, Coin> {
+    /// If `last_seen` is set, only those unconfirmed transactions with a matching last seen
+    /// will be considered.
+    pub fn coins(
+        &self,
+        outpoints: Option<&[bitcoin::OutPoint]>,
+        last_seen: Option<u64>,
+    ) -> HashMap<OutPoint, Coin> {
         // Get an iterator over all the wallet txos (not only the currently unspent ones) by using
         // lower level methods.
         let tx_graph = self.graph.graph();
@@ -209,9 +212,9 @@ impl BdkWallet {
             let derivation_index = i.into();
             let is_change = matches!(k, KeychainType::Change);
             let block_info = match full_txo.chain_position {
-                ChainPosition::Unconfirmed(_) => {
-                    if !self.unconfirmed_txids.contains(&outpoint.txid) {
-                        log::debug!("Ignoring coin at {}, which is unconfirmed and was not seen in the last sync.", outpoint);
+                ChainPosition::Unconfirmed(ls) => {
+                    if let Some(last_seen) = last_seen.filter(|last_seen| *last_seen != ls) {
+                        log::debug!("Ignoring coin at {}, which was last seen at {} instead of {} as required.", outpoint, ls, last_seen);
                         continue;
                     }
                     None
@@ -234,15 +237,23 @@ impl BdkWallet {
             let (mut spend_txid, mut spend_block) = (None, None);
             if let Some((spend_pos, txid)) = full_txo.spent_by {
                 spend_txid = Some(txid);
-                spend_block = match spend_pos {
-                    ChainPosition::Unconfirmed(_) => {
-                        if !self.unconfirmed_txids.contains(&txid) {
-                            log::debug!("Ignoring spend txid {}, which is unconfirmed and was not seen in the last sync.", txid);
+                match spend_pos {
+                    ChainPosition::Unconfirmed(ls) => {
+                        if let Some(last_seen) = last_seen.filter(|last_seen| *last_seen != ls) {
+                            log::debug!(
+                                "Ignoring spend txid {} for coin at {}, \
+                                which was last seen at {} instead of {} as required.",
+                                txid,
+                                outpoint,
+                                ls,
+                                last_seen
+                            );
                             spend_txid = None;
                         }
-                        None
                     }
-                    ChainPosition::Confirmed(anchor) => Some(block_info_from_anchor(anchor)),
+                    ChainPosition::Confirmed(anchor) => {
+                        spend_block = Some(block_info_from_anchor(anchor));
+                    }
                 };
             }
             let coin = crate::bitcoin::Coin {
@@ -327,10 +338,5 @@ impl BdkWallet {
     /// Apply a keychain update.
     pub fn apply_keychain_update(&mut self, keychain_update: BTreeMap<KeychainType, u32>) {
         let _ = self.graph.index.reveal_to_target_multi(&keychain_update);
-    }
-
-    /// Replace the wallet's `unconfirmed_txids` with `txids`.
-    pub fn set_unconfirmed_txids(&mut self, txids: HashSet<bitcoin::Txid>) {
-        self.unconfirmed_txids = txids;
     }
 }
