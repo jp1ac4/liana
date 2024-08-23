@@ -24,10 +24,13 @@ use liana_ui::{
 };
 
 use crate::{
-    bitcoind::{ConfigField, RpcAuthType, RpcAuthValues, StartInternalBitcoindError},
+    bitcoin::{
+        bitcoind::{ConfigField, RpcAuthType, RpcAuthValues, StartInternalBitcoindError},
+        electrum, BackendType,
+    },
     hw::{is_compatible_with_tapminiscript, HardwareWallet, UnsupportedReason},
     installer::{
-        message::{self, Message},
+        message::{self, DefineBitcoinBackend, DefineBitcoind, Message},
         prompt,
         step::{DownloadState, InstallState},
         Error,
@@ -1088,12 +1091,100 @@ pub fn help_backup<'a>() -> Element<'a, Message> {
     text(prompt::BACKUP_DESCRIPTOR_HELP).small().into()
 }
 
-pub fn define_bitcoin<'a>(
+pub fn define_bitcoin_backend<'a>(
     progress: (usize, usize),
+    available_backend_types: impl Iterator<Item = BackendType>,
+    selected_backend_type: &BackendType,
+    backend_view: Element<'a, Message>,
+    is_running: Option<&Result<(), Error>>,
+    can_try_ping: bool,
+) -> Element<'a, Message> {
+    let col = Column::new()
+        .push(
+            available_backend_types.fold(
+                Row::new()
+                    .push(text("Backend type:").small().bold())
+                    .spacing(10),
+                |row, backend_type| {
+                    row.push(radio(
+                        match backend_type {
+                            BackendType::Bitcoind => "Bitcoin Core",
+                            BackendType::Electrum => "Electrum",
+                        },
+                        backend_type,
+                        Some(*selected_backend_type),
+                        |new_selection| {
+                            Message::DefineBitcoinBackend(
+                                message::DefineBitcoinBackend::BackendTypeSelected(new_selection),
+                            )
+                        },
+                    ))
+                    .spacing(30)
+                    .align_items(Alignment::Center)
+                },
+            ),
+        )
+        .push(backend_view)
+        .push_maybe(if is_running.is_some() {
+            is_running.map(|res| {
+                if res.is_ok() {
+                    Container::new(
+                        Row::new()
+                            .spacing(10)
+                            .align_items(Alignment::Center)
+                            .push(icon::circle_check_icon().style(color::GREEN))
+                            .push(text("Connection checked").style(color::GREEN)),
+                    )
+                } else {
+                    Container::new(
+                        Row::new()
+                            .spacing(10)
+                            .align_items(Alignment::Center)
+                            .push(icon::circle_cross_icon().style(color::RED))
+                            .push(text("Connection failed").style(color::RED)),
+                    )
+                }
+            })
+        } else {
+            Some(Container::new(Space::with_height(Length::Fixed(25.0))))
+        })
+        .push(
+            Row::new()
+                .spacing(10)
+                .push(Container::new(
+                    button::secondary(None, "Check connection")
+                        .on_press_maybe(if can_try_ping {
+                            Some(Message::DefineBitcoinBackend(DefineBitcoinBackend::Ping))
+                        } else {
+                            None
+                        })
+                        .width(Length::Fixed(200.0)),
+                ))
+                .push(if is_running.map(|res| res.is_ok()).unwrap_or(false) {
+                    button::primary(None, "Next")
+                        .on_press(Message::Next)
+                        .width(Length::Fixed(200.0))
+                } else {
+                    button::primary(None, "Next").width(Length::Fixed(200.0))
+                }),
+        )
+        .spacing(50);
+
+    layout(
+        progress,
+        None,
+        "Set up connection to the Bitcoin backend",
+        col,
+        true,
+        Some(Message::Previous),
+    )
+}
+
+pub fn define_bitcoind<'a>(
     address: &form::Value<String>,
     rpc_auth_vals: &RpcAuthValues,
     selected_auth_type: &RpcAuthType,
-    is_running: Option<&Result<(), Error>>,
+    //is_running: Option<&Result<(), Error>>,
 ) -> Element<'a, Message> {
     let is_loopback = if let Some((ip, _port)) = address.value.clone().rsplit_once(':') {
         let (ipv4, ipv6) = (Ipv4Addr::from_str(ip), Ipv6Addr::from_str(ip));
@@ -1110,9 +1201,8 @@ pub fn define_bitcoin<'a>(
         .push(text("Address:").bold())
         .push(
             form::Form::new_trimmed("Address", address, |msg| {
-                Message::DefineBitcoind(message::DefineBitcoind::ConfigFieldEdited(
-                    ConfigField::Address,
-                    msg,
+                Message::DefineBitcoinBackend(DefineBitcoinBackend::DefineBitcoind(
+                    DefineBitcoind::ConfigFieldEdited(ConfigField::Address, msg),
                 ))
             })
             .warning("Please enter correct address")
@@ -1148,9 +1238,9 @@ pub fn define_bitcoin<'a>(
                             *auth_type,
                             Some(*selected_auth_type),
                             |new_selection| {
-                                Message::DefineBitcoind(
-                                    message::DefineBitcoind::RpcAuthTypeSelected(new_selection),
-                                )
+                                Message::DefineBitcoinBackend(DefineBitcoinBackend::DefineBitcoind(
+                                    DefineBitcoind::RpcAuthTypeSelected(new_selection),
+                                ))
                             },
                         ))
                         .spacing(30)
@@ -1161,9 +1251,8 @@ pub fn define_bitcoin<'a>(
         .push(match selected_auth_type {
             RpcAuthType::CookieFile => Row::new().push(
                 form::Form::new_trimmed("Cookie path", &rpc_auth_vals.cookie_path, |msg| {
-                    Message::DefineBitcoind(message::DefineBitcoind::ConfigFieldEdited(
-                        ConfigField::CookieFilePath,
-                        msg,
+                    Message::DefineBitcoinBackend(DefineBitcoinBackend::DefineBitcoind(
+                        DefineBitcoind::ConfigFieldEdited(ConfigField::CookieFilePath, msg),
                     ))
                 })
                 .warning("Please enter correct path")
@@ -1173,9 +1262,8 @@ pub fn define_bitcoin<'a>(
             RpcAuthType::UserPass => Row::new()
                 .push(
                     form::Form::new_trimmed("User", &rpc_auth_vals.user, |msg| {
-                        Message::DefineBitcoind(message::DefineBitcoind::ConfigFieldEdited(
-                            ConfigField::User,
-                            msg,
+                        Message::DefineBitcoinBackend(DefineBitcoinBackend::DefineBitcoind(
+                            DefineBitcoind::ConfigFieldEdited(ConfigField::User, msg),
                         ))
                     })
                     .warning("Please enter correct user")
@@ -1184,9 +1272,8 @@ pub fn define_bitcoin<'a>(
                 )
                 .push(
                     form::Form::new_trimmed("Password", &rpc_auth_vals.password, |msg| {
-                        Message::DefineBitcoind(message::DefineBitcoind::ConfigFieldEdited(
-                            ConfigField::Password,
-                            msg,
+                        Message::DefineBitcoinBackend(DefineBitcoinBackend::DefineBitcoind(
+                            DefineBitcoind::ConfigFieldEdited(ConfigField::Password, msg),
                         ))
                     })
                     .warning("Please enter correct password")
@@ -1197,69 +1284,29 @@ pub fn define_bitcoin<'a>(
         })
         .spacing(10);
 
-    let check_connect_enable = if let RpcAuthType::UserPass = selected_auth_type {
-        address.valid
-            && !rpc_auth_vals.password.value.is_empty()
-            && !rpc_auth_vals.user.value.is_empty()
-    } else {
-        address.valid && !rpc_auth_vals.cookie_path.value.is_empty()
-    };
-    layout(
-        progress,
-        None,
-        "Set up connection to the Bitcoin full node",
-        Column::new()
-            .push(col_address)
-            .push(col_auth)
-            .push_maybe(if is_running.is_some() {
-                is_running.map(|res| {
-                    if res.is_ok() {
-                        Container::new(
-                            Row::new()
-                                .spacing(10)
-                                .align_items(Alignment::Center)
-                                .push(icon::circle_check_icon().style(color::GREEN))
-                                .push(text("Connection checked").style(color::GREEN)),
-                        )
-                    } else {
-                        Container::new(
-                            Row::new()
-                                .spacing(10)
-                                .align_items(Alignment::Center)
-                                .push(icon::circle_cross_icon().style(color::RED))
-                                .push(text("Connection failed").style(color::RED)),
-                        )
-                    }
-                })
-            } else {
-                Some(Container::new(Space::with_height(Length::Fixed(25.0))))
+    Column::new()
+        .push(col_address)
+        .push(col_auth)
+        .spacing(50)
+        .into()
+}
+
+pub fn define_electrum<'a>(address: &form::Value<String>) -> Element<'a, Message> {
+    let col_address = Column::new()
+        .push(text("Address:").bold())
+        .push(
+            form::Form::new_trimmed("Address", address, |msg| {
+                Message::DefineBitcoinBackend(DefineBitcoinBackend::DefineElectrum(
+                    message::DefineElectrum::ConfigFieldEdited(electrum::ConfigField::Address, msg),
+                ))
             })
-            .push(
-                Row::new()
-                    .spacing(10)
-                    .push(Container::new(
-                        button::secondary(None, "Check connection")
-                            .on_press_maybe(if check_connect_enable {
-                                Some(Message::DefineBitcoind(
-                                    message::DefineBitcoind::PingBitcoind,
-                                ))
-                            } else {
-                                None
-                            })
-                            .width(Length::Fixed(200.0)),
-                    ))
-                    .push(if is_running.map(|res| res.is_ok()).unwrap_or(false) {
-                        button::primary(None, "Next")
-                            .on_press(Message::Next)
-                            .width(Length::Fixed(200.0))
-                    } else {
-                        button::primary(None, "Next").width(Length::Fixed(200.0))
-                    }),
-            )
-            .spacing(50),
-        true,
-        Some(Message::Previous),
-    )
+            .warning("Please enter correct address")
+            .size(text::P1_SIZE)
+            .padding(10),
+        )
+        .spacing(10);
+
+    Column::new().push(col_address).spacing(50).into()
 }
 
 pub fn select_bitcoind_type<'a>(progress: (usize, usize)) -> Element<'a, Message> {
@@ -1365,7 +1412,7 @@ pub fn start_internal_bitcoind<'a>(
     download_state: Option<&DownloadState>,
     install_state: Option<&InstallState>,
 ) -> Element<'a, Message> {
-    let version = crate::bitcoind::VERSION;
+    let version = crate::bitcoin::bitcoind::VERSION;
     let mut next_button = button::primary(None, "Next").width(Length::Fixed(200.0));
     if let Some(Ok(_)) = started {
         next_button = next_button.on_press(Message::Next);

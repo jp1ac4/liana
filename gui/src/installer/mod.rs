@@ -13,6 +13,7 @@ use liana_ui::{
     component::network_banner,
     widget::{Column, Element},
 };
+
 use tracing::{error, info, warn};
 
 use context::{Context, RemoteBackend};
@@ -39,7 +40,7 @@ use crate::{
 
 pub use message::Message;
 use step::{
-    BackupDescriptor, BackupMnemonic, ChooseBackend, DefineBitcoind, DefineDescriptor, Final,
+    BackupDescriptor, BackupMnemonic, ChooseBackend, DefineBitcoinBackend, DefineDescriptor, Final,
     ImportDescriptor, ImportRemoteWallet, InternalBitcoindStep, RecoverMnemonic,
     RegisterDescriptor, SelectBitcoindTypeStep, ShareXpubs, Step, Welcome,
 };
@@ -176,7 +177,7 @@ impl Installer {
                     ChooseBackend::new(self.network).into(),
                     SelectBitcoindTypeStep::new().into(),
                     InternalBitcoindStep::new(&self.context.data_dir).into(),
-                    DefineBitcoind::new().into(),
+                    DefineBitcoinBackend::new(crate::bitcoin::BackendType::Bitcoind).into(),
                     Final::new().into(),
                 ];
                 self.next()
@@ -198,7 +199,7 @@ impl Installer {
                     RegisterDescriptor::new_import_wallet().into(),
                     SelectBitcoindTypeStep::new().into(),
                     InternalBitcoindStep::new(&self.context.data_dir).into(),
-                    DefineBitcoind::new().into(),
+                    DefineBitcoinBackend::new(crate::bitcoin::BackendType::Bitcoind).into(),
                     Final::new().into(),
                 ];
 
@@ -683,6 +684,7 @@ pub enum Error {
     Backend(Arc<DaemonError>),
     Settings(SettingsError),
     Bitcoind(String),
+    Electrum(String),
     CannotCreateDatadir(String),
     CannotCreateFile(String),
     CannotWriteToFile(String),
@@ -734,6 +736,7 @@ impl std::fmt::Display for Error {
             Self::Backend(e) => write!(f, "Remote backend error: {}", e),
             Self::Settings(e) => write!(f, "Settings file error: {}", e),
             Self::Bitcoind(e) => write!(f, "Failed to ping bitcoind: {}", e),
+            Self::Electrum(e) => write!(f, "Failed to ping electrum: {}", e),
             Self::CannotCreateDatadir(e) => write!(f, "Failed to create datadir: {}", e),
             Self::CannotGetAvailablePort(e) => write!(f, "Failed to get available port: {}", e),
             Self::CannotWriteToFile(e) => write!(f, "Failed to write to file: {}", e),

@@ -35,7 +35,7 @@ use state::{
 
 use crate::{
     app::{cache::Cache, error::Error, menu::Menu, wallet::Wallet},
-    bitcoind::Bitcoind,
+    bitcoin::bitcoind::Bitcoind,
     daemon::{embedded::EmbeddedDaemon, Daemon, DaemonBackend},
 };
 

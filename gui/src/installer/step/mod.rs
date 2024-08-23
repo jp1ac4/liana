@@ -4,8 +4,9 @@ mod descriptor;
 mod mnemonic;
 mod share_xpubs;
 
-pub use bitcoin::bitcoind::{
-    DefineBitcoind, DownloadState, InstallState, InternalBitcoindStep, SelectBitcoindTypeStep,
+pub use bitcoin::{
+    bitcoind::{DownloadState, InstallState, InternalBitcoindStep, SelectBitcoindTypeStep},
+    DefineBitcoinBackend,
 };
 
 pub use descriptor::{BackupDescriptor, DefineDescriptor, ImportDescriptor, RegisterDescriptor};
@@ -21,7 +22,7 @@ use iced::{Command, Subscription};
 use liana_ui::widget::*;
 
 use crate::{
-    bitcoind::Bitcoind,
+    bitcoin::bitcoind::Bitcoind,
     hw::HardwareWallets,
     installer::{context::Context, message::Message, view},
 };

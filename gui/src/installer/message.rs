@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 use super::{context, Error};
 use crate::{
-    bitcoind::{Bitcoind, ConfigField, RpcAuthType},
+    bitcoin::{
+        bitcoind::{Bitcoind, ConfigField, RpcAuthType},
+        electrum, BackendType,
+    },
     download::Progress,
     hw::HardwareWalletMessage,
     lianalite::client::{auth::AuthClient, backend::api},
@@ -33,7 +36,7 @@ pub enum Message {
     ImportRemoteWallet(ImportRemoteWallet),
     SelectBitcoindType(SelectBitcoindTypeMsg),
     InternalBitcoind(InternalBitcoindMsg),
-    DefineBitcoind(DefineBitcoind),
+    DefineBitcoinBackend(DefineBitcoinBackend),
     DefineDescriptor(DefineDescriptor),
     ImportXpub(Fingerprint, Result<DescriptorPublicKey, Error>),
     HardwareWallets(HardwareWalletMessage),
@@ -73,8 +76,20 @@ pub enum ImportRemoteWallet {
 pub enum DefineBitcoind {
     ConfigFieldEdited(ConfigField, String),
     RpcAuthTypeSelected(RpcAuthType),
-    PingBitcoindResult(Result<(), Error>),
-    PingBitcoind,
+}
+
+#[derive(Debug, Clone)]
+pub enum DefineElectrum {
+    ConfigFieldEdited(electrum::ConfigField, String),
+}
+
+#[derive(Debug, Clone)]
+pub enum DefineBitcoinBackend {
+    BackendTypeSelected(BackendType),
+    DefineBitcoind(DefineBitcoind),
+    DefineElectrum(DefineElectrum),
+    PingResult((BackendType, Result<(), Error>)),
+    Ping,
 }
 
 #[derive(Debug, Clone)]

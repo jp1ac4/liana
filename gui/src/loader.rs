@@ -29,7 +29,7 @@ use crate::{
         config::Config as GUIConfig,
         wallet::{Wallet, WalletError},
     },
-    bitcoind::{
+    bitcoin::bitcoind::{
         internal_bitcoind_debug_log_path, stop_bitcoind, Bitcoind, StartInternalBitcoindError,
     },
     daemon::{client, embedded::EmbeddedDaemon, model::*, Daemon, DaemonError},
