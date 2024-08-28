@@ -39,7 +39,7 @@ use crate::{
 
 pub use message::Message;
 use step::{
-    BackupDescriptor, BackupMnemonic, ChooseBackend, DefineBitcoind, DefineDescriptor, Final,
+    BackupDescriptor, BackupMnemonic, ChooseBackend, DefineDescriptor, DefineNode, Final,
     ImportDescriptor, ImportRemoteWallet, InternalBitcoindStep, RecoverMnemonic,
     RegisterDescriptor, SelectBitcoindTypeStep, ShareXpubs, Step, Welcome,
 };
@@ -176,7 +176,7 @@ impl Installer {
                     ChooseBackend::new(self.network).into(),
                     SelectBitcoindTypeStep::new().into(),
                     InternalBitcoindStep::new(&self.context.data_dir).into(),
-                    DefineBitcoind::new().into(),
+                    DefineNode::new().into(),
                     Final::new().into(),
                 ];
                 self.next()
@@ -198,7 +198,7 @@ impl Installer {
                     RegisterDescriptor::new_import_wallet().into(),
                     SelectBitcoindTypeStep::new().into(),
                     InternalBitcoindStep::new(&self.context.data_dir).into(),
-                    DefineBitcoind::new().into(),
+                    DefineNode::new().into(),
                     Final::new().into(),
                 ];
 
