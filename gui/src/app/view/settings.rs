@@ -28,7 +28,7 @@ use crate::{
         menu::Menu,
         view::{hw, warning::warn},
     },
-    bitcoind::{RpcAuthType, RpcAuthValues},
+    bitcoin::bitcoind::{RpcAuthType, RpcAuthValues},
     hw::HardwareWallet,
 };
 

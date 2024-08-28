@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::{context, Error};
 use crate::{
-    bitcoind::{Bitcoind, ConfigField, RpcAuthType},
+    bitcoin::bitcoind::{Bitcoind, ConfigField, RpcAuthType},
     download::Progress,
     hw::HardwareWalletMessage,
     lianalite::client::{auth::AuthClient, backend::api},

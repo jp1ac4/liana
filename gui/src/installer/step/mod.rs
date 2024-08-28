@@ -21,7 +21,7 @@ use iced::{Command, Subscription};
 use liana_ui::widget::*;
 
 use crate::{
-    bitcoind::Bitcoind,
+    bitcoin::bitcoind::Bitcoind,
     hw::HardwareWallets,
     installer::{context::Context, message::Message, view},
 };

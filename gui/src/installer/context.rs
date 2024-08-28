@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::{
     app::settings::KeySetting,
-    bitcoind::{Bitcoind, InternalBitcoindConfig},
+    bitcoin::bitcoind::{Bitcoind, InternalBitcoindConfig},
     lianalite::client::backend::{BackendClient, BackendWalletClient},
     signer::Signer,
 };

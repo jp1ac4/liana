@@ -24,7 +24,7 @@ use liana_ui::{
 };
 
 use crate::{
-    bitcoind::{ConfigField, RpcAuthType, RpcAuthValues, StartInternalBitcoindError},
+    bitcoin::bitcoind::{ConfigField, RpcAuthType, RpcAuthValues, StartInternalBitcoindError},
     hw::{is_compatible_with_tapminiscript, HardwareWallet, UnsupportedReason},
     installer::{
         message::{self, Message},
@@ -1365,7 +1365,7 @@ pub fn start_internal_bitcoind<'a>(
     download_state: Option<&DownloadState>,
     install_state: Option<&InstallState>,
 ) -> Element<'a, Message> {
-    let version = crate::bitcoind::VERSION;
+    let version = crate::bitcoin::bitcoind::VERSION;
     let mut next_button = button::primary(None, "Next").width(Length::Fixed(200.0));
     if let Some(Ok(_)) = started {
         next_button = next_button.on_press(Message::Next);
