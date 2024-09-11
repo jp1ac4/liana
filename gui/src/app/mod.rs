@@ -284,12 +284,12 @@ impl App {
                 }
                 Command::none()
             }
-            Message::LoadDaemonConfig(cfg) => {
+            Message::LoadDaemonConfig(node_type, cfg) => {
                 let path = self.config.daemon_config_path.clone().expect(
                     "Application config must have a daemon configuration file path at this point.",
                 );
                 let res = self.load_daemon_config(&path, *cfg);
-                self.update(Message::DaemonConfigLoaded(res))
+                self.update(Message::DaemonConfigLoaded(node_type, res))
             }
             Message::WalletUpdated(Ok(wallet)) => {
                 self.wallet = wallet.clone();

@@ -102,32 +102,38 @@ impl State for BitcoindSettingsState {
         message: Message,
     ) -> Command<Message> {
         match message {
-            Message::DaemonConfigLoaded(res) => match res {
+            Message::DaemonConfigLoaded(node_type, res) => match res {
                 Ok(()) => {
                     self.config_updated = true;
                     self.warning = None;
-                    if let Some(settings) = &mut self.node_settings {
-                        settings.edited(true);
-                        return Command::perform(async {}, |_| {
-                            Message::View(view::Message::Settings(
-                                view::SettingsMessage::EditBitcoindSettings,
-                            ))
-                        });
+                    if node_type == NodeType::Bitcoind {
+                        if let Some(settings) = &mut self.node_settings {
+                            settings.edited(true);
+                        }
                     }
-                    if let Some(settings) = &mut self.electrum_settings {
-                        settings.edited(true);
-                        return Command::perform(async {}, |_| {
-                            Message::View(view::Message::Settings(
-                                view::SettingsMessage::EditBitcoindSettings,
-                            ))
-                        });
+                    if node_type == NodeType::Electrum {
+                        if let Some(settings) = &mut self.electrum_settings {
+                            settings.edited(true);
+                        }
                     }
+                    return Command::perform(async {}, |_| {
+                        Message::View(view::Message::Settings(
+                            view::SettingsMessage::EditBitcoindSettings,
+                        ))
+                    });
                 }
                 Err(e) => {
                     self.config_updated = false;
                     self.warning = Some(e);
-                    if let Some(settings) = &mut self.node_settings {
-                        settings.edited(false);
+                    if node_type == NodeType::Bitcoind {
+                        if let Some(settings) = &mut self.node_settings {
+                            settings.edited(false);
+                        }
+                    }
+                    if node_type == NodeType::Electrum {
+                        if let Some(settings) = &mut self.electrum_settings {
+                            settings.edited(false);
+                        }
                     }
                 }
             },
@@ -359,7 +365,7 @@ impl BitcoindSettings {
                         }));
                     self.processing = true;
                     return Command::perform(async move { daemon_config }, |cfg| {
-                        Message::LoadDaemonConfig(Box::new(cfg))
+                        Message::LoadDaemonConfig(NodeType::Bitcoind, Box::new(cfg))
                     });
                 }
             }
@@ -466,7 +472,7 @@ impl ElectrumSettings {
                         }));
                     self.processing = true;
                     return Command::perform(async move { daemon_config }, |cfg| {
-                        Message::LoadDaemonConfig(Box::new(cfg))
+                        Message::LoadDaemonConfig(NodeType::Electrum, Box::new(cfg))
                     });
                 }
             }

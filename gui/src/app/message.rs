@@ -14,6 +14,7 @@ use crate::{
     app::{cache::Cache, error::Error, view, wallet::Wallet},
     daemon::model::*,
     hw::HardwareWalletMessage,
+    node::NodeType,
 };
 
 #[derive(Debug)]
@@ -21,8 +22,8 @@ pub enum Message {
     Tick,
     UpdateCache(Result<Cache, Error>),
     View(view::Message),
-    LoadDaemonConfig(Box<DaemonConfig>),
-    DaemonConfigLoaded(Result<(), Error>),
+    LoadDaemonConfig(NodeType, Box<DaemonConfig>),
+    DaemonConfigLoaded(NodeType, Result<(), Error>),
     LoadWallet(Wallet),
     Info(Result<GetInfoResult, Error>),
     ReceiveAddress(Result<(Address, ChildNumber), Error>),
