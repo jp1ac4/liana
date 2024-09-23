@@ -33,7 +33,7 @@ use liana_gui::{
     },
     loader::{self, Loader},
     logger::Logger,
-    VERSION,
+    RETAILER_VERSION as VERSION,
 };
 
 #[derive(Debug, PartialEq)]
