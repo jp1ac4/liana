@@ -41,7 +41,7 @@ use liana_gui::{
         client::backend::{api, BackendWalletClient},
         login,
     },
-    VERSION,
+    RETAILER_VERSION as VERSION,
 };
 
 #[derive(Debug, PartialEq)]
