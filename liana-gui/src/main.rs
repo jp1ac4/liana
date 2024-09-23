@@ -18,7 +18,7 @@ use liana_gui::{
     dir::LianaDirectory,
     gui::{Config, GUI},
     node::bitcoind::delete_all_bitcoind_locks_for_process,
-    VERSION,
+    RETAILER_VERSION as VERSION,
 };
 
 #[derive(Debug, PartialEq)]
