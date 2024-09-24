@@ -28,6 +28,9 @@ use crate::{
     daemon::model::{HistoryTransaction, Payment, PaymentKind, TransactionKind},
 };
 
+const RETAILER_BUTTON_TEXT: &str = "PRIORITY SUPPORT";
+const RETAILER_BUTTON_URL: &str = "https://21stcapital.com/priority/";
+
 const RESCAN_WARNING: &str = "As this wallet was restored from a backup, you may need to rescan the blockchain to see past transactions.";
 
 fn rescan_warning<'a>() -> Element<'a, Message> {
@@ -77,7 +80,14 @@ pub fn home_view<'a>(
     let fiat_balance = fiat_converter.as_ref().map(|c| c.convert(*balance));
     let fiat_unconfirmed = fiat_converter.map(|c| c.convert(*unconfirmed_balance));
     Column::new()
-        .push(h3("Balance"))
+        .push(
+            Row::new().push(h3("Balance").width(Length::Fill)).push(
+                button::retailer(RETAILER_BUTTON_TEXT)
+                    .height(Length::Fixed(50.0))
+                    .width(Length::Fixed(200.0))
+                    .on_press(Message::OpenUrl(RETAILER_BUTTON_URL.to_string())),
+            ),
+        )
         .push(
             Column::new()
                 .push(
