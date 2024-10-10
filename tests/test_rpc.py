@@ -26,11 +26,16 @@ def test_getinfo(lianad):
     assert "timestamp" in res.keys()
     assert res["version"] == "7.0.0-dev"
     assert res["network"] == "regtest"
+    last_poll_timestamp = res["last_poll_timestamp"]
+    assert last_poll_timestamp is not None
     wait_for(lambda: lianad.rpc.getinfo()["block_height"] == 101)
     res = lianad.rpc.getinfo()
     assert res["sync"] == 1.0
     assert "main" in res["descriptors"]
     assert res["rescan_progress"] is None
+    time.sleep(lianad.poll_interval_secs + 1)
+    res = lianad.rpc.getinfo()
+    assert res["last_poll_timestamp"] > last_poll_timestamp
 
 
 def test_getaddress(lianad):
