@@ -2624,7 +2624,7 @@ dependencies = [
 [[package]]
 name = "liana"
 version = "7.0.0"
-source = "git+https://github.com/wizardsardine/liana?branch=master#18950c219a9233e584fabb1f5b168e17fa450902"
+source = "git+https://github.com/jp1ac4/liana?branch=poller-store-completion-timestamp#5ba1863241b537e5a089288f8692cd7fc8a386c8"
 dependencies = [
  "backtrace",
  "bdk_coin_select",
