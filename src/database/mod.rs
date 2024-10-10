@@ -14,6 +14,7 @@ use crate::{
 
 use std::{
     collections::{HashMap, HashSet},
+    convert::TryInto,
     fmt::Display,
     iter::FromIterator,
     str::FromStr,
@@ -80,6 +81,12 @@ pub trait DatabaseConnection {
 
     /// Mark the rescan as complete.
     fn complete_rescan(&mut self);
+
+    /// Get the timestamp at which the last poll completed, if any.
+    fn last_poll_timestamp(&mut self) -> Option<u64>;
+
+    /// Set the timestamp at which the last poll completed.
+    fn set_last_poll(&mut self, timestamp: u64);
 
     /// Get the derivation index for this address, as well as whether this address is change.
     fn derivation_index_by_address(
@@ -218,6 +225,18 @@ impl DatabaseConnection for SqliteConn {
 
     fn complete_rescan(&mut self) {
         self.complete_wallet_rescan()
+    }
+
+    fn last_poll_timestamp(&mut self) -> Option<u64> {
+        self.db_wallet().last_poll_timestamp.map(|ts| ts.into())
+    }
+
+    fn set_last_poll(&mut self, timestamp: u64) {
+        // Sqlite uses i32 for integers so we need to truncate to u32.
+        let ts: u32 = timestamp
+            .try_into()
+            .expect("system clock year is earlier than 2106");
+        self.set_wallet_last_poll_timestamp(ts);
     }
 
     fn coins(
