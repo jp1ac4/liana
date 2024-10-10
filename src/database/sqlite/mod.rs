@@ -43,7 +43,7 @@ use miniscript::bitcoin::{
     secp256k1,
 };
 
-const DB_VERSION: i64 = 5;
+const DB_VERSION: i64 = 6;
 
 /// Last database version for which Bitcoin transactions were not stored in database. In practice
 /// this meant we relied on the bitcoind watchonly wallet to store them for us.
@@ -369,6 +369,19 @@ impl SqliteConn {
                 .map(|_| ())
         })
         .expect("Database must be available");
+    }
+
+    pub fn set_wallet_last_poll_timestamp(&mut self, timestamp: u32) {
+        db_exec(&mut self.conn, |db_tx| {
+            // NOTE: this will need to be updated if we ever implement multi-wallet support
+            db_tx
+                .execute(
+                    "UPDATE wallets SET last_poll_timestamp = (?1)",
+                    rusqlite::params![timestamp],
+                )
+                .map(|_| ())
+        })
+        .expect("Database must be available")
     }
 
     /// Get all the coins from DB, optionally filtered by coin status and/or outpoint.
@@ -2384,7 +2397,7 @@ CREATE TABLE labels (
     }
 
     #[test]
-    fn v0_to_v5_migration() {
+    fn v0_to_v6_migration() {
         let secp = secp256k1::Secp256k1::verification_only();
 
         // Create a database with version 0, using the old schema.
@@ -2490,7 +2503,7 @@ CREATE TABLE labels (
         {
             let mut conn = db.connection().unwrap();
             let version = conn.db_version();
-            assert_eq!(version, 5);
+            assert_eq!(version, 6);
         }
         // We should now be able to insert another PSBT, to query both, and the first PSBT must
         // have no associated timestamp.
@@ -2550,6 +2563,14 @@ CREATE TABLE labels (
             items.insert(txid);
             let db_labels = conn.db_labels(&items);
             assert_eq!(db_labels[0].value, "hello");
+        }
+
+        // In v6, we can get and set the last poll timestamp.
+        {
+            let mut conn = db.connection().unwrap();
+            assert!(conn.db_wallet().last_poll_timestamp.is_none());
+            conn.set_wallet_last_poll_timestamp(1234567);
+            assert_eq!(conn.db_wallet().last_poll_timestamp, Some(1234567));
         }
 
         fs::remove_dir_all(tmp_dir).unwrap();
