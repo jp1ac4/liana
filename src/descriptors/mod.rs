@@ -6,6 +6,7 @@ use miniscript::{
         secp256k1,
     },
     descriptor,
+    miniscript::satisfy::Placeholder,
     plan::{Assets, CanSign},
     psbt::{PsbtInputExt, PsbtOutputExt},
     translate_hash_clone, ForEachKey, TranslatePk, Translator,
@@ -270,15 +271,21 @@ impl LianaDescriptor {
                 .expect("unhardened index");
             let witscript_size = der_desc
                 .explicit_script()
-                .map(|s| varint_len(s.len()) + s.len())
-                .unwrap_or(0);
+                .map(|s| varint_len(s.len()) + s.len());
 
             // Finally, compute the satisfaction template for the primary path and get its size.
-            der_desc
-                .plan(&assets)
-                .expect("Always satisfiable")
-                .witness_size()
-                + witscript_size
+            let plan = der_desc.plan(&assets).expect("Always satisfiable");
+            plan.witness_size()
+                + witscript_size.unwrap_or_else(|_| {
+                    plan.witness_template()
+                        .iter()
+                        .map(|elem| match elem {
+                            Placeholder::TapScript(s) => varint_len(s.len()),
+                            Placeholder::TapControlBlock(cb) => varint_len(cb.serialize().len()),
+                            _ => 0,
+                        })
+                        .sum()
+                })
         } else {
             // We add one to account for the witness stack size, as the values above give the
             // difference in size for a satisfied input that was *already* in a transaction
