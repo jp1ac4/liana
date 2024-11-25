@@ -1338,6 +1338,7 @@ CREATE TABLE labels (
                 is_change: false,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_unspent_coins(&[coin_a]);
             // We can query by status and/or outpoint.
@@ -1384,6 +1385,7 @@ CREATE TABLE labels (
                 is_change: true,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_unspent_coins(&[coin_b]);
             // Both coins are unconfirmed.
@@ -1515,6 +1517,7 @@ CREATE TABLE labels (
                 is_change: false,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             let outpoint_d = bitcoin::OutPoint::new(txs.get(4).unwrap().txid(), 43);
             let coin_d = Coin {
@@ -1526,6 +1529,7 @@ CREATE TABLE labels (
                 is_change: false,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_unspent_coins(&[coin_c, coin_d]);
 
@@ -1638,6 +1642,7 @@ CREATE TABLE labels (
                 is_change: false,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_unspent_coins(&[coin_a]);
             assert_eq!(conn.coins(&[], &[])[0].outpoint, coin_a.outpoint);
@@ -1680,6 +1685,7 @@ CREATE TABLE labels (
                 is_change: true,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_unspent_coins(&[coin_b]);
             let outpoints: HashSet<bitcoin::OutPoint> = conn
@@ -1803,6 +1809,7 @@ CREATE TABLE labels (
                 is_change: false,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_unspent_coins(&[coin_imma]);
             let outpoints: HashSet<bitcoin::OutPoint> = conn
@@ -1974,6 +1981,7 @@ CREATE TABLE labels (
                     is_change: false,
                     spend_txid: None,
                     spend_block: None,
+                    is_from_self: false,
                 },
                 Coin {
                     outpoint: bitcoin::OutPoint::new(txs.get(1).unwrap().txid(), 2),
@@ -1987,6 +1995,7 @@ CREATE TABLE labels (
                     is_change: false,
                     spend_txid: None,
                     spend_block: None,
+                    is_from_self: false,
                 },
                 Coin {
                     outpoint: bitcoin::OutPoint::new(txs.get(2).unwrap().txid(), 3),
@@ -2003,6 +2012,7 @@ CREATE TABLE labels (
                         height: 101_199,
                         time: 1_231_678,
                     }),
+                    is_from_self: false,
                 },
                 Coin {
                     outpoint: bitcoin::OutPoint::new(txs.get(4).unwrap().txid(), 4),
@@ -2016,6 +2026,7 @@ CREATE TABLE labels (
                     is_change: false,
                     spend_txid: None,
                     spend_block: None,
+                    is_from_self: false,
                 },
                 Coin {
                     outpoint: bitcoin::OutPoint::new(txs.get(5).unwrap().txid(), 5),
@@ -2032,6 +2043,7 @@ CREATE TABLE labels (
                         height: 101_105,
                         time: 1_201_678,
                     }),
+                    is_from_self: false,
                 },
             ];
             conn.new_unspent_coins(&coins);
@@ -2177,6 +2189,7 @@ CREATE TABLE labels (
                     is_change: false,
                     spend_txid: None,
                     spend_block: None,
+                    is_from_self: false,
                 },
                 Coin {
                     outpoint: bitcoin::OutPoint::new(txs.get(1).unwrap().txid(), 2),
@@ -2190,6 +2203,7 @@ CREATE TABLE labels (
                     is_change: false,
                     spend_txid: None,
                     spend_block: None,
+                    is_from_self: false,
                 },
                 Coin {
                     outpoint: bitcoin::OutPoint::new(txs.get(2).unwrap().txid(), 3),
@@ -2206,6 +2220,7 @@ CREATE TABLE labels (
                         height: 101_199,
                         time: 1_123_000,
                     }),
+                    is_from_self: false,
                 },
                 Coin {
                     outpoint: bitcoin::OutPoint::new(txs.get(4).unwrap().txid(), 4),
@@ -2219,6 +2234,7 @@ CREATE TABLE labels (
                     is_change: false,
                     spend_txid: None,
                     spend_block: None,
+                    is_from_self: false,
                 },
                 Coin {
                     outpoint: bitcoin::OutPoint::new(txs.get(5).unwrap().txid(), 5),
@@ -2235,6 +2251,7 @@ CREATE TABLE labels (
                         height: 101_105,
                         time: 1_126_000,
                     }),
+                    is_from_self: false,
                 },
             ];
             conn.new_unspent_coins(&coins);
@@ -2363,6 +2380,7 @@ CREATE TABLE labels (
                     } else {
                         None
                     },
+                    is_from_self: false,
                 })
                 .collect();
 
@@ -2508,6 +2526,7 @@ CREATE TABLE labels (
                 block_info: None,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             let coin_tx_b: Coin = Coin {
                 outpoint: bitcoin::OutPoint::new(tx_b.txid(), 0),
@@ -2518,6 +2537,7 @@ CREATE TABLE labels (
                 block_info: None,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_txs(&[tx_a, tx_b]);
             conn.new_unspent_coins(&[coin_tx_a, coin_tx_b]);
@@ -2540,6 +2560,7 @@ CREATE TABLE labels (
                 block_info: None,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_txs(&[tx_c.clone()]);
             conn.spend_coins(&[(coin_tx_a.outpoint, tx_c.txid())]);
@@ -2563,6 +2584,7 @@ CREATE TABLE labels (
                 block_info: None,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_txs(&[tx_d.clone()]);
             conn.spend_coins(&[(coin_tx_c.outpoint, tx_d.txid())]);
@@ -2585,6 +2607,7 @@ CREATE TABLE labels (
                 block_info: None,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_txs(&[tx_e.clone()]);
             conn.spend_coins(&[
@@ -2609,6 +2632,7 @@ CREATE TABLE labels (
                 block_info: None,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             };
             conn.new_txs(&[tx_f.clone()]);
             conn.spend_coins(&[(coin_tx_e.outpoint, tx_f.txid())]);
@@ -2950,6 +2974,7 @@ CREATE TABLE labels (
                 is_change: false,
                 spend_txid: None,
                 spend_block: None,
+                is_from_self: false,
             }]);
             let coins = conn.coins(&[], &[]);
             assert_eq!(coins.len(), 3);
