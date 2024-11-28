@@ -93,7 +93,8 @@ impl Home {
             |(balance, unconfirmed_balance), coin| {
                 if coin.spend_info.is_some() {
                     (balance, unconfirmed_balance)
-                } else if coin.block_height.is_some() {
+                } else if coin.block_height.is_some() || coin.is_from_self {
+                    // Include any unconfirmed coins from self in confirmed balance.
                     (balance + coin.amount, unconfirmed_balance)
                 } else {
                     (balance, unconfirmed_balance + coin.amount)
@@ -164,22 +165,28 @@ impl State for Home {
                     self.expiring_coins = Vec::new();
                     for coin in coins {
                         if coin.spend_info.is_none() {
-                            if coin.block_height.is_some() {
+                            if coin.block_height.is_some() || coin.is_from_self {
                                 self.balance += coin.amount;
-                                let timelock = self.wallet.main_descriptor.first_timelock_value();
-                                let seq =
-                                    remaining_sequence(&coin, cache.blockheight as u32, timelock);
-                                // Warn user for coins that are expiring in less than 10 percent of
-                                // the timelock.
-                                if seq <= timelock as u32 * 10 / 100 {
-                                    self.expiring_coins.push(coin.outpoint);
-                                }
-                                if let Some(last) = &mut self.remaining_sequence {
-                                    if seq < *last {
-                                        *last = seq
+                                if coin.block_height.is_some() {
+                                    let timelock =
+                                        self.wallet.main_descriptor.first_timelock_value();
+                                    let seq = remaining_sequence(
+                                        &coin,
+                                        cache.blockheight as u32,
+                                        timelock,
+                                    );
+                                    // Warn user for coins that are expiring in less than 10 percent of
+                                    // the timelock.
+                                    if seq <= timelock as u32 * 10 / 100 {
+                                        self.expiring_coins.push(coin.outpoint);
                                     }
-                                } else {
-                                    self.remaining_sequence = Some(seq);
+                                    if let Some(last) = &mut self.remaining_sequence {
+                                        if seq < *last {
+                                            *last = seq
+                                        }
+                                    } else {
+                                        self.remaining_sequence = Some(seq);
+                                    }
                                 }
                             } else {
                                 self.unconfirmed_balance += coin.amount;
