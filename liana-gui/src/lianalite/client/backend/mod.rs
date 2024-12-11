@@ -58,9 +58,8 @@ fn request<U: IntoUrl>(
 
 #[derive(Debug, Clone)]
 pub struct BackendClient {
-    pub auth: Arc<RwLock<auth::AccessTokenResponse>>,
-    auth_client: auth::AuthClient,
 
+    access_token: String,
     url: String,
     network: Network,
     http: reqwest::Client,
@@ -70,9 +69,8 @@ pub struct BackendClient {
 
 impl BackendClient {
     pub async fn connect(
-        auth_client: auth::AuthClient,
         url: String,
-        credentials: auth::AccessTokenResponse,
+        access_token: String,
         network: Network,
     ) -> Result<Self, DaemonError> {
         let http = reqwest::Client::new();
@@ -80,7 +78,7 @@ impl BackendClient {
             &http,
             Method::GET,
             format!("{}/v1/me", url),
-            &credentials.access_token,
+            &access_token,
         )
         .send()
         .await?;
@@ -91,8 +89,7 @@ impl BackendClient {
         let user_id = res.sub;
 
         Ok(Self {
-            auth: Arc::new(RwLock::new(credentials)),
-            auth_client,
+            access_token,
             network,
             url,
             user_id,
@@ -101,8 +98,13 @@ impl BackendClient {
     }
 
     pub fn user_email(&self) -> &str {
-        &self.auth_client.email
+        "user email goes here"
     }
+
+    pub fn access_token(&self) -> &str {
+        &self.access_token
+    }
+
 
     pub async fn connect_first(self) -> Result<(BackendWalletClient, api::Wallet), DaemonError> {
         let wallets = self.list_wallets().await?;
@@ -123,7 +125,7 @@ impl BackendClient {
     }
 
     async fn request<U: IntoUrl>(&self, method: Method, url: U) -> RequestBuilder {
-        let access_token = &self.auth.read().await.access_token;
+        let access_token = &self.access_token;
         request(&self.http, method, url, access_token)
     }
 
@@ -496,10 +498,6 @@ impl BackendWalletClient {
         let res: api::ListCoins = response.json().await?;
         Ok(res)
     }
-
-    pub async fn auth(&self) -> AccessTokenResponse {
-        self.inner.auth.read().await.clone()
-    }
 }
 
 #[async_trait]
@@ -514,58 +512,6 @@ impl Daemon for BackendWalletClient {
 
     /// refresh the token if close to expiration.
     async fn is_alive(&self, datadir: &Path, network: Network) -> Result<(), DaemonError> {
-        let auth = self.auth().await;
-        if auth.expires_at < Utc::now().timestamp() + 60 {
-            match self.inner.auth.try_write() {
-                Err(_) => {
-                    // something is using the lock, we will try next time.
-                    return Ok(());
-                }
-                Ok(mut old) => {
-                    let new = self
-                        .inner
-                        .auth_client
-                        .refresh_token(&auth.refresh_token)
-                        .await?;
-
-                    let mut settings = Settings::from_file(datadir.to_path_buf(), network)
-                        .map_err(|e| {
-                            DaemonError::Unexpected(format!(
-                                "Cannot access to settings.json file: {}",
-                                e
-                            ))
-                        })?;
-
-                    if let Some(wallet_settings) = settings.wallets.iter_mut().find(|w| {
-                        if let Some(auth) = &w.remote_backend_auth {
-                            auth.wallet_id == self.wallet_uuid
-                        } else {
-                            false
-                        }
-                    }) {
-                        wallet_settings.remote_backend_auth = Some(AuthConfig {
-                            email: self.inner.auth_client.email.clone(),
-                            wallet_id: self.wallet_id(),
-                            refresh_token: new.refresh_token.clone(),
-                        });
-                    } else {
-                        tracing::info!("Wallet id was not found in the settings");
-                    }
-
-                    settings
-                        .to_file(datadir.to_path_buf(), network)
-                        .map_err(|e| {
-                            DaemonError::Unexpected(format!(
-                                "Cannot access to settings.json file: {}",
-                                e
-                            ))
-                        })?;
-
-                    *old = new;
-                    tracing::info!("Liana backend access was refreshed");
-                }
-            }
-        }
         Ok(())
     }
 

@@ -14,7 +14,7 @@ use liana_ui::{
 };
 use lianad::config::ConfigError;
 
-use crate::{app, installer::UserFlow};
+use crate::app;
 
 const NETWORKS: [Network; 4] = [
     Network::Bitcoin,
@@ -74,27 +74,27 @@ impl Launcher {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::View(ViewMessage::ImportWallet) => {
-                let datadir_path = self.datadir_path.clone();
-                let network = self.network;
-                Task::perform(async move { (datadir_path, network) }, |(d, n)| {
-                    Message::Install(d, n, UserFlow::AddWallet)
-                })
-            }
-            Message::View(ViewMessage::CreateWallet) => {
-                let datadir_path = self.datadir_path.clone();
-                let network = self.network;
-                Task::perform(async move { (datadir_path, network) }, |(d, n)| {
-                    Message::Install(d, n, UserFlow::CreateWallet)
-                })
-            }
-            Message::View(ViewMessage::ShareXpubs) => {
-                let datadir_path = self.datadir_path.clone();
-                let network = self.network;
-                Task::perform(async move { (datadir_path, network) }, |(d, n)| {
-                    Message::Install(d, n, UserFlow::ShareXpubs)
-                })
-            }
+            // Message::View(ViewMessage::ImportWallet) => {
+            //     let datadir_path = self.datadir_path.clone();
+            //     let network = self.network;
+            //     Command::perform(async move { (datadir_path, network) }, |(d, n)| {
+            //         Message::Install(d, n, UserFlow::AddWallet)
+            //     })
+            // }
+            // Message::View(ViewMessage::CreateWallet) => {
+            //     let datadir_path = self.datadir_path.clone();
+            //     let network = self.network;
+            //     Command::perform(async move { (datadir_path, network) }, |(d, n)| {
+            //         Message::Install(d, n, UserFlow::CreateWallet)
+            //     })
+            // }
+            // Message::View(ViewMessage::ShareXpubs) => {
+            //     let datadir_path = self.datadir_path.clone();
+            //     let network = self.network;
+            //     Command::perform(async move { (datadir_path, network) }, |(d, n)| {
+            //         Message::Install(d, n, UserFlow::ShareXpubs)
+            //     })
+            // }
             Message::View(ViewMessage::DeleteWallet(DeleteWalletMessage::ShowModal)) => {
                 let wallet_datadir = self.datadir_path.join(self.network.to_string());
                 let config_path = wallet_datadir.join(app::config::DEFAULT_FILE_NAME);
@@ -340,7 +340,7 @@ impl Launcher {
 #[derive(Debug, Clone)]
 pub enum Message {
     View(ViewMessage),
-    Install(PathBuf, Network, UserFlow),
+    // Install(PathBuf, Network, UserFlow),
     Checked(Result<State, String>),
     Run(PathBuf, app::config::Config, Network),
 }

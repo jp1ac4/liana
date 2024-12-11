@@ -150,16 +150,10 @@ impl LianaLiteLogin {
                 },
                 Task::perform(
                     async move {
-                        let service_config = super::client::get_service_config(network)
+                        let service_config = super::client::get_service_config()
                             .await
                             .map_err(|e| Error::Unexpected(e.to_string()))?;
-                        let client = AuthClient::new(
-                            service_config.auth_api_url,
-                            service_config.auth_api_public_key,
-                            auth_config.email,
-                        );
                         connect_with_refresh_token(
-                            client,
                             auth_config.refresh_token,
                             auth_config.wallet_id,
                             service_config.backend_api_url,
@@ -206,40 +200,34 @@ impl LianaLiteLogin {
                         .is_ok();
                     email.value = value;
                 }
-                Message::View(ViewMessage::RequestOTP) => {
-                    if email.value.is_empty() {
-                        email.valid = false;
-                    } else if email.valid {
-                        let email = email.value.clone();
-                        let network = self.network;
-                        self.processing = true;
-                        self.connection_error = None;
-                        self.auth_error = None;
-                        return Task::perform(
-                            async move {
-                                let config = super::client::get_service_config(network)
-                                    .await
-                                    .map_err(|e| {
-                                        if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
-                                            Error::Unexpected(
-                                                "Remote servers are unresponsive".to_string(),
-                                            )
-                                        } else {
-                                            Error::Unexpected(e.to_string())
-                                        }
-                                    })?;
-                                let client = AuthClient::new(
-                                    config.auth_api_url,
-                                    config.auth_api_public_key,
-                                    email,
-                                );
-                                client.sign_in_otp().await?;
-                                Ok((client, config.backend_api_url))
-                            },
-                            Message::OTPRequested,
-                        );
-                    }
-                }
+                // Message::View(ViewMessage::RequestOTP) => {
+                //     if email.value.is_empty() {
+                //         email.valid = false;
+                //     } else if email.valid {
+                //         let email = email.value.clone();
+                //         let network = self.network;
+                //         self.processing = true;
+                //         self.connection_error = None;
+                //         self.auth_error = None;
+                //         return Command::perform(
+                //             async move {
+                //                 let config = super::client::get_service_config()
+                //                     .await
+                //                     .map_err(|e| {
+                //                         if e.status() == Some(reqwest::StatusCode::NOT_FOUND) {
+                //                             Error::Unexpected(
+                //                                 "Remote servers are unresponsive".to_string(),
+                //                             )
+                //                         } else {
+                //                             Error::Unexpected(e.to_string())
+                //                         }
+                //                     })?;
+                //                 Ok(config.backend_api_url)
+                //             },
+                //             Message::OTPRequested,
+                //         );
+                //     }
+                // }
                 Message::OTPRequested(res) => {
                     self.processing = false;
                     match res {
@@ -333,7 +321,7 @@ impl LianaLiteLogin {
                                         network,
                                         wallet.clone(),
                                         client.user_email().to_string(),
-                                        client.auth().await.refresh_token,
+                                        client.inner_client().access_token().to_string(),
                                     )
                                     .await?;
 
@@ -534,8 +522,8 @@ pub async fn connect(
     backend_api_url: String,
     network: Network,
 ) -> Result<BackendState, Error> {
-    let access = auth.verify_otp(token.trim_end()).await?;
-    let client = BackendClient::connect(auth, backend_api_url, access.clone(), network).await?;
+    // let access = auth.verify_otp(token.trim_end()).await?;
+    let client = BackendClient::connect(backend_api_url, token, network).await?;
 
     let wallets = client.list_wallets().await?;
     if wallets.is_empty() {
@@ -555,14 +543,13 @@ pub async fn connect(
 }
 
 pub async fn connect_with_refresh_token(
-    auth: AuthClient,
     refresh_token: String,
     wallet_id: String,
     backend_api_url: String,
     network: Network,
 ) -> Result<BackendState, Error> {
-    let access = auth.refresh_token(&refresh_token).await?;
-    let client = BackendClient::connect(auth, backend_api_url, access.clone(), network).await?;
+    // let access = auth.refresh_token(&refresh_token).await?;
+    let client = BackendClient::connect(backend_api_url, refresh_token, network).await?;
 
     if let Some(wallet) = client
         .list_wallets()
@@ -570,9 +557,11 @@ pub async fn connect_with_refresh_token(
         .into_iter()
         .find(|w| w.id == wallet_id)
     {
+        println!("wallet found");
         let (wallet_client, wallet) = client.connect_wallet(wallet);
         Ok(BackendState::WalletExists(wallet_client, wallet))
     } else {
+        println!("no wallet found");
         Ok(BackendState::NoWallet(client))
     }
 }

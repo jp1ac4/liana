@@ -25,7 +25,7 @@ use liana_gui::{
     app::{self, cache::Cache, config::default_datadir, wallet::Wallet, App},
     datadir,
     hw::HardwareWalletConfig,
-    installer::{self, Installer},
+    // installer::{self, Installer},
     launcher::{self, Launcher},
     lianalite::{
         client::{backend::api, backend::BackendWalletClient},
@@ -101,7 +101,7 @@ pub struct GUI {
 
 enum State {
     Launcher(Box<Launcher>),
-    Installer(Box<Installer>),
+    // Installer(Box<Installer>),
     Loader(Box<Loader>),
     Login(Box<login::LianaLiteLogin>),
     App(App),
@@ -117,7 +117,7 @@ pub enum Message {
     CtrlC,
     FontLoaded(Result<(), iced::font::Error>),
     Launch(Box<launcher::Message>),
-    Install(Box<installer::Message>),
+    // Install(Box<installer::Message>),
     Load(Box<loader::Message>),
     Run(Box<app::Message>),
     Login(Box<login::Message>),
@@ -142,7 +142,7 @@ async fn ctrl_c() -> Result<(), ()> {
 impl GUI {
     fn title(&self) -> String {
         match self.state {
-            State::Installer(_) => format!("Liana v{} Installer", VERSION),
+            // State::Installer(_) => format!("Liana v{} Installer", VERSION),
             _ => format!("Liana v{}", VERSION),
         }
     }
@@ -184,7 +184,7 @@ impl GUI {
                 match &mut self.state {
                     State::Loader(s) => s.stop(),
                     State::Launcher(s) => s.stop(),
-                    State::Installer(s) => s.stop(),
+                    // State::Installer(s) => s.stop(),
                     State::App(s) => s.stop(),
                     State::Login(_) => {}
                 };
@@ -199,28 +199,28 @@ impl GUI {
                 }
             }
             (State::Launcher(l), Message::Launch(msg)) => match *msg {
-                launcher::Message::Install(datadir_path, network, init) => {
-                    if !datadir_path.exists() {
-                        // datadir is created right before launching the installer
-                        // so logs can go in <datadir_path>/installer.log
-                        if let Err(e) = datadir::create_directory(&datadir_path) {
-                            error!("Failed to create datadir: {}", e);
-                        } else {
-                            info!(
-                                "Created a fresh data directory at {}",
-                                &datadir_path.to_string_lossy()
-                            );
-                        }
-                    }
-                    self.logger.set_installer_mode(
-                        datadir_path.clone(),
-                        self.log_level.unwrap_or(LevelFilter::INFO),
-                    );
+                // launcher::Message::Install(datadir_path, network, init) => {
+                //     if !datadir_path.exists() {
+                //         // datadir is created right before launching the installer
+                //         // so logs can go in <datadir_path>/installer.log
+                //         if let Err(e) = datadir::create_directory(&datadir_path) {
+                //             error!("Failed to create datadir: {}", e);
+                //         } else {
+                //             info!(
+                //                 "Created a fresh data directory at {}",
+                //                 &datadir_path.to_string_lossy()
+                //             );
+                //         }
+                //     }
+                //     self.logger.set_installer_mode(
+                //         datadir_path.clone(),
+                //         self.log_level.unwrap_or(LevelFilter::INFO),
+                //     );
 
-                    let (install, command) = Installer::new(datadir_path, network, None, init);
-                    self.state = State::Installer(Box::new(install));
-                    command.map(|msg| Message::Install(Box::new(msg)))
-                }
+                //     let (install, command) = Installer::new(datadir_path, network, None, init);
+                //     self.state = State::Installer(Box::new(install));
+                //     command.map(|msg| Message::Install(Box::new(msg)))
+                // }
                 launcher::Message::Run(datadir_path, cfg, network) => {
                     self.logger.set_running_mode(
                         datadir_path.clone(),
@@ -260,16 +260,16 @@ impl GUI {
                     self.state = State::Launcher(Box::new(launcher));
                     command.map(|msg| Message::Launch(Box::new(msg)))
                 }
-                login::Message::Install(remote_backend) => {
-                    let (install, command) = Installer::new(
-                        l.datadir.clone(),
-                        l.network,
-                        remote_backend,
-                        installer::UserFlow::CreateWallet,
-                    );
-                    self.state = State::Installer(Box::new(install));
-                    command.map(|msg| Message::Install(Box::new(msg)))
-                }
+                // login::Message::Install(remote_backend) => {
+                //     let (install, command) = Installer::new(
+                //         l.datadir.clone(),
+                //         l.network,
+                //         remote_backend,
+                //         installer::UserFlow::CreateWallet,
+                //     );
+                //     self.state = State::Installer(Box::new(install));
+                //     command.map(|msg| Message::Install(Box::new(msg)))
+                // }
                 login::Message::Run(Ok((backend_client, wallet))) => {
                     let config = app::Config::from_file(
                         &l.datadir
@@ -296,54 +296,54 @@ impl GUI {
                 }
                 _ => l.update(*msg).map(|msg| Message::Login(Box::new(msg))),
             },
-            (State::Installer(i), Message::Install(msg)) => {
-                if let installer::Message::Exit(path, internal_bitcoind) = *msg {
-                    let settings = app::settings::Settings::from_file(i.datadir.clone(), i.network)
-                        .expect("A settings file was created");
-                    if settings
-                        .wallets
-                        .first()
-                        .map(|w| w.remote_backend_auth.is_some())
-                        == Some(true)
-                    {
-                        let (login, command) =
-                            login::LianaLiteLogin::new(i.datadir.clone(), i.network, settings);
-                        self.state = State::Login(Box::new(login));
-                        command.map(|msg| Message::Login(Box::new(msg)))
-                    } else {
-                        let cfg = app::Config::from_file(&path).expect("A config file was created");
-                        let daemon_cfg =
-                            DaemonConfig::from_file(cfg.daemon_config_path.clone()).unwrap();
-                        let datadir_path = daemon_cfg
-                            .data_dir
-                            .as_ref()
-                            .expect("Installer must have set it")
-                            .clone();
+            // (State::Installer(i), Message::Install(msg)) => {
+            //     if let installer::Message::Exit(path, internal_bitcoind) = *msg {
+            //         let settings = app::settings::Settings::from_file(i.datadir.clone(), i.network)
+            //             .expect("A settings file was created");
+            //         if settings
+            //             .wallets
+            //             .first()
+            //             .map(|w| w.remote_backend_auth.is_some())
+            //             == Some(true)
+            //         {
+            //             let (login, command) =
+            //                 login::LianaLiteLogin::new(i.datadir.clone(), i.network, settings);
+            //             self.state = State::Login(Box::new(login));
+            //             command.map(|msg| Message::Login(Box::new(msg)))
+            //         } else {
+            //             let cfg = app::Config::from_file(&path).expect("A config file was created");
+            //             let daemon_cfg =
+            //                 DaemonConfig::from_file(cfg.daemon_config_path.clone()).unwrap();
+            //             let datadir_path = daemon_cfg
+            //                 .data_dir
+            //                 .as_ref()
+            //                 .expect("Installer must have set it")
+            //                 .clone();
 
-                        self.logger.set_running_mode(
-                            datadir_path.clone(),
-                            daemon_cfg.bitcoin_config.network,
-                            self.log_level
-                                .unwrap_or_else(|| cfg.log_level().unwrap_or(LevelFilter::INFO)),
-                        );
-                        self.logger.remove_install_log_file(datadir_path.clone());
-                        let (loader, command) = Loader::new(
-                            datadir_path,
-                            cfg,
-                            daemon_cfg.bitcoin_config.network,
-                            internal_bitcoind,
-                        );
-                        self.state = State::Loader(Box::new(loader));
-                        command.map(|msg| Message::Load(Box::new(msg)))
-                    }
-                } else if let installer::Message::BackToLauncher(network) = *msg {
-                    let (launcher, command) = Launcher::new(i.destination_path(), Some(network));
-                    self.state = State::Launcher(Box::new(launcher));
-                    command.map(|msg| Message::Launch(Box::new(msg)))
-                } else {
-                    i.update(*msg).map(|msg| Message::Install(Box::new(msg)))
-                }
-            }
+            //             self.logger.set_running_mode(
+            //                 datadir_path.clone(),
+            //                 daemon_cfg.bitcoin_config.network,
+            //                 self.log_level
+            //                     .unwrap_or_else(|| cfg.log_level().unwrap_or(LevelFilter::INFO)),
+            //             );
+            //             self.logger.remove_install_log_file(datadir_path.clone());
+            //             let (loader, command) = Loader::new(
+            //                 datadir_path,
+            //                 cfg,
+            //                 daemon_cfg.bitcoin_config.network,
+            //                 internal_bitcoind,
+            //             );
+            //             self.state = State::Loader(Box::new(loader));
+            //             command.map(|msg| Message::Load(Box::new(msg)))
+            //         }
+            //     } else if let installer::Message::BackToLauncher(network) = *msg {
+            //         let (launcher, command) = Launcher::new(i.destination_path(), Some(network));
+            //         self.state = State::Launcher(Box::new(launcher));
+            //         command.map(|msg| Message::Launch(Box::new(msg)))
+            //     } else {
+            //         i.update(*msg).map(|msg| Message::Install(Box::new(msg)))
+            //     }
+            // }
             (State::Loader(loader), Message::Load(msg)) => match *msg {
                 loader::Message::View(loader::ViewMessage::SwitchNetwork) => {
                     let (launcher, command) =
@@ -375,7 +375,7 @@ impl GUI {
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch(vec![
             match &self.state {
-                State::Installer(v) => v.subscription().map(|msg| Message::Install(Box::new(msg))),
+                // State::Installer(v) => v.subscription().map(|msg| Message::Install(Box::new(msg))),
                 State::Loader(v) => v.subscription().map(|msg| Message::Load(Box::new(msg))),
                 State::App(v) => v.subscription().map(|msg| Message::Run(Box::new(msg))),
                 State::Launcher(v) => v.subscription().map(|msg| Message::Launch(Box::new(msg))),
@@ -401,7 +401,7 @@ impl GUI {
 
     fn view(&self) -> Element<Message> {
         match &self.state {
-            State::Installer(v) => v.view().map(|msg| Message::Install(Box::new(msg))),
+            // State::Installer(v) => v.view().map(|msg| Message::Install(Box::new(msg))),
             State::App(v) => v.view().map(|msg| Message::Run(Box::new(msg))),
             State::Launcher(v) => v.view().map(|msg| Message::Launch(Box::new(msg))),
             State::Loader(v) => v.view().map(|msg| Message::Load(Box::new(msg))),
