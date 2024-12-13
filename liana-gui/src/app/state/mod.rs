@@ -233,7 +233,12 @@ impl State for Home {
                     cache.last_poll_at_startup,
                 );
                 // If this is the current panel, reload it if wallet is no longer syncing.
-                if is_current && wallet_was_syncing && self.sync_status.is_synced() {
+                // Don't reload if the user has selected an event as doing so would clear it.
+                if is_current
+                    && self.selected_event.is_none()
+                    && wallet_was_syncing
+                    && self.sync_status.is_synced()
+                {
                     return self.reload(daemon, self.wallet.clone());
                 }
             }
@@ -311,6 +316,10 @@ impl State for Home {
         daemon: Arc<dyn Daemon + Sync + Send>,
         wallet: Arc<Wallet>,
     ) -> Command<Message> {
+        // Regardless of whether the wallet is syncing, set those fields that don't
+        // require data to be fetched.
+        self.selected_event = None;
+        self.wallet = wallet;
         // If the wallet is syncing, we expect it to finish soon and so better to wait for
         // updated data before reloading. Besides, if the wallet is syncing, the DB may be
         // locked if the poller is running and we wouldn't be able to reload data until
@@ -318,8 +327,6 @@ impl State for Home {
         if self.sync_status.wallet_is_syncing() {
             return Command::none();
         }
-        self.selected_event = None;
-        self.wallet = wallet;
         let daemon2 = daemon.clone();
         let now: u32 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
