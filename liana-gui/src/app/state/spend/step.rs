@@ -354,13 +354,15 @@ impl DefineSpend {
                     );
                 }
             }
-            // For coin selection error (insufficient funds), do not make any changes to
-            // selected coins on screen and just show user how much is left to select.
-            // User can then either:
-            // - modify recipient amounts and/or feerate and let coin selection run again, or
-            // - select coins manually.
             Ok(CreateSpendResult::InsufficientFunds { missing }) => {
                 self.amount_left_to_select = Some(Amount::from_sat(missing));
+                if !self.is_user_coin_selection {
+                    // The missing amount is based on all candidates for coin selection
+                    // being used. These are all confirmed coins and unconfirmed from self.
+                    for (coin, selected) in &mut self.coins {
+                        *selected = coin.block_height.is_some() || coin.is_from_self;
+                    }
+                }
                 if let Some((i, recipient)) = recipient_with_max {
                     let amount = Amount::from_sat(if destinations.is_empty() {
                         // If there are no other recipients, then the missing value will
