@@ -18,7 +18,7 @@ use std::{
 };
 
 use miniscript::{
-    bitcoin::{self, bip32, psbt::Psbt, secp256k1, Transaction, Txid},
+    bitcoin::{self, bip32, psbt::Psbt, secp256k1, OutPoint, Transaction, Txid},
     descriptor,
 };
 
@@ -196,6 +196,16 @@ impl DummyDatabase {
         for coin in coins {
             self.db.write().unwrap().coins.insert(coin.outpoint, coin);
         }
+    }
+
+    fn get_parent_coins(&mut self, outpoint: &OutPoint) -> Vec<Coin> {
+        let mut parents = Vec::new();
+        for coin in self.db.read().unwrap().coins.values().cloned() {
+            if coin.spend_txid == Some(outpoint.txid) {
+                parents.push(coin);
+            }
+        }
+        parents
     }
 }
 
@@ -484,8 +494,35 @@ impl DatabaseConnection for DummyDatabase {
         }
     }
 
-    fn update_coins_from_self(&mut self, _prev_tip_height: i32) {
-        // noop
+    fn update_coins_from_self(&mut self, prev_tip_height: i32) {
+        loop {
+            let coins: HashMap<_, _> = self.coins(&[], &[]);
+            let mut updated = 0;
+            for (op, coin) in coins {
+                if coin.is_from_self
+                    || coin
+                        .block_info
+                        .filter(|info| info.height <= prev_tip_height)
+                        .is_some()
+                {
+                    continue;
+                }
+                let parents = self.get_parent_coins(&op);
+                if !parents.is_empty()
+                    && parents
+                        .iter()
+                        .all(|parent| parent.block_info.is_some() || parent.is_from_self)
+                {
+                    let mut db = self.db.write().unwrap();
+                    let db_coin = &mut db.coins.get_mut(&op).unwrap();
+                    db_coin.is_from_self = true;
+                    updated += 1
+                }
+            }
+            if updated == 0 {
+                break;
+            }
+        }
     }
 
     fn list_wallet_transactions(
