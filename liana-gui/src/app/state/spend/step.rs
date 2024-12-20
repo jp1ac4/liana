@@ -283,8 +283,11 @@ impl DefineSpend {
             }
             outpoints
         } else if self.send_max_to_recipient.is_some() {
-            // If user has not selected coins, send the max available from all coins.
-            self.coins.iter().map(|(c, _)| c.outpoint).collect()
+            // If user has not selected coins, send the max available from all eligbile coins.
+            self.coins
+                .iter()
+                .filter_map(|(c, _)| coin_is_owned(c).then_some(c.outpoint))
+                .collect()
         } else {
             Vec::new() // pass empty list for auto-selection
         };
