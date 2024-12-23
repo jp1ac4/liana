@@ -1,6 +1,14 @@
-use crate::bitcoin::{d::BlockStats, BlockChainTip};
+use std::str::FromStr;
 
-use miniscript::bitcoin;
+use crate::bitcoin::{
+    d::{BlockStats, ListDescEntry},
+    BlockChainTip,
+};
+
+use miniscript::{
+    bitcoin,
+    descriptor::{Descriptor, DescriptorPublicKey},
+};
 
 /// Truncate the sync progress, rounding it up if it gets above 0.9999. Note this also caps the
 /// progress to 1.0, as bitcoind could temporarily return value >1.0 in getblockchaininfo's
@@ -68,14 +76,23 @@ where
     })
 }
 
-/// Replaces `'` with `h` in a descriptor string and removes the checksum if present.
-/// The checksum will differ depending on whether `'` or `h` has been used.
-pub fn normalize_desc_string(desc: &str) -> String {
-    desc
-        .split_once("#") // for the checksum
-        .map(|parts| parts.0)
-        .unwrap_or(desc) // if no checksum, keep the whole thing
-        .replace("'", "h")
+pub fn contain_desc_timestamp(
+    current_descs: &[ListDescEntry],
+    desc: &Descriptor<DescriptorPublicKey>,
+    timestamp: u32,
+) -> bool {
+    current_descs
+        .iter()
+        .filter_map(|entry| {
+            if let Ok(entry_desc) = Descriptor::<DescriptorPublicKey>::from_str(&entry.desc) {
+                Some((entry_desc, entry.timestamp))
+            } else {
+                None
+            }
+        })
+        .find(|(entry_desc, _)| desc.to_string() == entry_desc.to_string()) // it should be fine to compare the whole thing
+        .map(|(_, entry_timestamp)| entry_timestamp == timestamp)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

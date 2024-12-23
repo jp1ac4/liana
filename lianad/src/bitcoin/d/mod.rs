@@ -8,7 +8,7 @@ use crate::{
     config,
 };
 use liana::descriptors::LianaDescriptor;
-use utils::{block_before_date, normalize_desc_string, roundup_progress};
+use utils::{block_before_date, contain_desc_timestamp, roundup_progress};
 
 use std::{
     cmp,
@@ -29,7 +29,7 @@ use jsonrpc::{
 
 use miniscript::{
     bitcoin::{self, address, hashes::hex::FromHex},
-    descriptor,
+    descriptor::{self, Descriptor, DescriptorPublicKey},
 };
 
 use serde_json::Value as Json;
@@ -1054,17 +1054,17 @@ impl BitcoinD {
         Ok(())
     }
 
-    // For the given descriptor strings check if they are imported at this timestamp in the
+    // For the given descriptors, check if they are imported at this timestamp in the
     // watchonly wallet.
-    fn check_descs_timestamp(&self, descs: &[String], timestamp: u32) -> bool {
+    fn check_descs_timestamp(
+        &self,
+        descs: &[&Descriptor<DescriptorPublicKey>],
+        timestamp: u32,
+    ) -> bool {
         let current_descs = self.list_descriptors();
 
         for desc in descs {
-            let present = current_descs
-                .iter()
-                .find(|entry| normalize_desc_string(&entry.desc) == normalize_desc_string(desc))
-                .map(|entry| entry.timestamp == timestamp)
-                .unwrap_or(false);
+            let present = contain_desc_timestamp(&current_descs, desc, timestamp);
             if !present {
                 return false;
             }
@@ -1112,15 +1112,15 @@ impl BitcoinD {
             .fold(1_000, |range, entry| {
                 cmp::max(range, entry.range.map(|r| r[1]).unwrap_or(0))
             });
-        let desc_str = [
-            desc.receive_descriptor().to_string(),
-            desc.change_descriptor().to_string(),
+        let descs = [
+            desc.receive_descriptor().as_descriptor_public_key(),
+            desc.change_descriptor().as_descriptor_public_key(),
         ];
-        let desc_json: Vec<Json> = desc_str
+        let desc_json: Vec<Json> = descs
             .iter()
-            .map(|desc_str| {
+            .map(|desc| {
                 serde_json::json!({
-                    "desc": desc_str,
+                    "desc": desc.to_string(),
                     "timestamp": timestamp,
                     "active": false,
                     "range": max_range,
@@ -1154,7 +1154,7 @@ impl BitcoinD {
             }
 
             i += 1;
-            if self.check_descs_timestamp(&desc_str, timestamp) {
+            if self.check_descs_timestamp(&descs, timestamp) {
                 return Ok(());
             } else if i >= NUM_RETRIES {
                 return Err(BitcoindError::StartRescan);
