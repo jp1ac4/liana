@@ -68,6 +68,16 @@ where
     })
 }
 
+/// Replaces `'` with `h` in a descriptor string and removes the checksum if present.
+/// The checksum will differ depending on whether `'` or `h` has been used.
+pub fn normalize_desc_string(desc: &str) -> String {
+    desc
+        .split_once("#") // for the checksum
+        .map(|parts| parts.0)
+        .unwrap_or(desc) // if no checksum, keep the whole thing
+        .replace("'", "h")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

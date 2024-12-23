@@ -8,7 +8,7 @@ use crate::{
     config,
 };
 use liana::descriptors::LianaDescriptor;
-use utils::{block_before_date, roundup_progress};
+use utils::{block_before_date, normalize_desc_string, roundup_progress};
 
 use std::{
     cmp,
@@ -1062,7 +1062,7 @@ impl BitcoinD {
         for desc in descs {
             let present = current_descs
                 .iter()
-                .find(|entry| &entry.desc == desc)
+                .find(|entry| normalize_desc_string(&entry.desc) == normalize_desc_string(desc))
                 .map(|entry| entry.timestamp == timestamp)
                 .unwrap_or(false);
             if !present {
