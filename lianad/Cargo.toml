@@ -21,7 +21,7 @@ path = "src/bin/cli.rs"
 nonblocking_shutdown = []
 
 [dependencies]
-liana = { path = "../liana" }
+liana = { git = "https://github.com/wizardsardine/liana", branch = "master" }
 # For managing transactions (it re-exports the bitcoin crate)
 miniscript = { version = "11.0", features = ["serde", "compiler", "base64"] }
 

@@ -486,7 +486,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c601c4dc7e6c3efa538a0afbb43b964cefab9a9b5e8f352fa0ca38145448a5e7"
 dependencies = [
  "bitcoin 0.31.2",
- "miniscript",
+ "miniscript 11.2.0",
 ]
 
 [[package]]
@@ -3036,7 +3036,7 @@ checksum = "8606a9c7375fb139e68fc1ca7cf9c6709566eeca448ff33e37632d8a4302eefe"
 dependencies = [
  "async-trait",
  "bitcoin 0.31.2",
- "miniscript",
+ "miniscript 11.2.0",
 ]
 
 [[package]]
@@ -3047,7 +3047,21 @@ dependencies = [
  "bip39",
  "getrandom",
  "log",
- "miniscript",
+ "miniscript 12.3.0",
+ "rdrand",
+ "serde",
+]
+
+[[package]]
+name = "liana"
+version = "9.0.0"
+source = "git+https://github.com/wizardsardine/liana?branch=master#dbfbad7f5a4277f287146ce0241e3144fe9539cd"
+dependencies = [
+ "bdk_coin_select",
+ "bip39",
+ "getrandom",
+ "log",
+ "miniscript 11.2.0",
  "rdrand",
  "serde",
 ]
@@ -3057,9 +3071,9 @@ name = "liana-fuzz"
 version = "0.0.0"
 dependencies = [
  "arbitrary",
- "liana",
+ "liana 9.0.0",
  "libfuzzer-sys",
- "secp256k1 0.28.2",
+ "secp256k1 0.29.1",
 ]
 
 [[package]]
@@ -3079,7 +3093,7 @@ dependencies = [
  "iced",
  "iced_runtime",
  "jsonrpc 0.12.1",
- "liana",
+ "liana 9.0.0 (git+https://github.com/wizardsardine/liana?branch=master)",
  "liana-ui",
  "lianad",
  "log",
@@ -3114,9 +3128,9 @@ dependencies = [
  "dirs 5.0.1",
  "fern",
  "jsonrpc 0.17.0",
- "liana",
+ "liana 9.0.0 (git+https://github.com/wizardsardine/liana?branch=master)",
  "log",
- "miniscript",
+ "miniscript 11.2.0",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3393,6 +3407,17 @@ dependencies = [
  "bech32 0.10.0-beta",
  "bitcoin 0.31.2",
  "bitcoin-internals 0.2.0",
+ "serde",
+]
+
+[[package]]
+name = "miniscript"
+version = "12.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bd3c9608217b0d6fa9c9c8ddd875b85ab72bd4311cfc8db35e1b5a08fc11f4d"
+dependencies = [
+ "bech32 0.11.0",
+ "bitcoin 0.32.4",
  "serde",
 ]
 
