@@ -4,20 +4,18 @@ use std::{
     sync::Arc,
 };
 
-use bdk_electrum::bdk_chain::{
+use bdk_chain::{
     bitcoin::{self, bip32, BlockHash, OutPoint, ScriptBuf, TxOut},
-    keychain::KeychainTxOutIndex,
+    indexer::keychain_txout::KeychainTxOutIndex,
     local_chain::{ChangeSet as ChainChangeSet, CheckPoint, LocalChain},
     miniscript::{Descriptor, DescriptorPublicKey},
     tx_graph::{self, TxGraph},
-    ChainOracle, ChainPosition, ConfirmationTimeHeightAnchor, IndexedTxGraph,
+    Anchor, BlockId, ChainOracle, ChainPosition, ConfirmationBlockTime, IndexedTxGraph, TxUpdate,
 };
 use miniscript::bitcoin::bip32::ChildNumber;
 
-use super::utils::{
-    block_id_from_tip, block_info_from_anchor, height_i32_from_u32, height_u32_from_i32,
-};
-use crate::bitcoin::{Block, BlockChainTip, Coin, COINBASE_MATURITY};
+use super::utils::{block_id_from_tip, height_i32_from_u32, height_u32_from_i32};
+use crate::bitcoin::{Block, BlockChainTip, BlockInfo, Coin, COINBASE_MATURITY};
 use liana::descriptors::LianaDescriptor;
 
 // We don't want to overload the server (each SPK is separate call).
@@ -27,6 +25,51 @@ const LOOK_AHEAD_LIMIT: u32 = 30;
 pub enum KeychainType {
     Receive,
     Change,
+}
+
+// The following anchor implementation is taken from a previous version of bdk_chain:
+// https://docs.rs/bdk_chain/0.15.0/bdk_chain/struct.ConfirmationTimeHeightAnchor.html
+//
+// We use this when we know the confirmation height and time, but not the confirmation
+// block hash, which is the case for transactions stored in our database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConfirmationTimeHeightAnchor {
+    /// The confirmation height of the transaction being anchored.
+    pub confirmation_height: u32,
+    /// The confirmation time of the transaction being anchored.
+    pub confirmation_time: u64,
+    /// The anchor block.
+    pub anchor_block: BlockId,
+}
+
+impl Anchor for ConfirmationTimeHeightAnchor {
+    fn anchor_block(&self) -> BlockId {
+        self.anchor_block
+    }
+
+    fn confirmation_height_upper_bound(&self) -> u32 {
+        self.confirmation_height
+    }
+}
+
+// For `ConfirmationBlockTime`, the anchor block is also the confirmation block.
+impl From<ConfirmationBlockTime> for ConfirmationTimeHeightAnchor {
+    fn from(cbt: ConfirmationBlockTime) -> Self {
+        Self {
+            confirmation_height: cbt.block_id.height,
+            confirmation_time: cbt.confirmation_time,
+            anchor_block: cbt.block_id,
+        }
+    }
+}
+
+impl ConfirmationTimeHeightAnchor {
+    fn into_confirmation_block_info(self) -> BlockInfo {
+        BlockInfo {
+            height: height_i32_from_u32(self.confirmation_height),
+            time: self.confirmation_time.try_into().expect("u32 by consensus"),
+        }
+    }
 }
 
 pub struct BdkWallet {
@@ -105,8 +148,6 @@ impl BdkWallet {
                 };
                 graph_cs.txouts.insert(coin.outpoint, txout);
                 // If the coin's deposit transaction is confirmed, tell BDK by inserting an anchor.
-                // Otherwise, we could insert a last seen timestamp but we don't have such data stored in
-                // the table.
                 if let Some(block) = coin.block_info {
                     graph_cs.anchors.insert((
                         ConfirmationTimeHeightAnchor {
@@ -132,7 +173,12 @@ impl BdkWallet {
             }
             let mut graph = TxGraph::default();
             graph.apply_changeset(graph_cs);
-            let _ = bdk_wallet.graph.apply_update(graph);
+            // We set a `seen_at` for unconfirmed txs so that they're part of the canonical history,
+            // since they have been seen in the best chain corresponding to `tip`.
+            // Note that the `BdkWallet::coins()` method only considers such coins.
+            // Choose the earliest possible value, 0, so that any transactions seen subsequently are
+            // guaranteed to have a later `seen_at` value.
+            let _ = bdk_wallet.graph.apply_update_at(graph.into(), Some(0));
         }
         bdk_wallet
     }
@@ -196,6 +242,8 @@ impl BdkWallet {
     /// If `outpoints` is an empty slice, no coins will be returned.
     /// If `last_seen` is set, only those unconfirmed transactions with a matching last seen
     /// will be considered.
+    /// Regardless of filters, any coins or spend transactions that have never been seen on the
+    /// best chain will be ignored.
     pub fn coins(
         &self,
         outpoints: Option<&[bitcoin::OutPoint]>,
@@ -206,8 +254,11 @@ impl BdkWallet {
         let tx_graph = self.graph.graph();
         let txo_index = &self.graph.index;
         let tip_id = self.local_chain.tip().block_id();
-        let wallet_txos =
-            tx_graph.filter_chain_txouts(&self.local_chain, tip_id, txo_index.outpoints());
+        let wallet_txos = tx_graph.filter_chain_txouts(
+            &self.local_chain,
+            tip_id,
+            txo_index.outpoints().iter().copied(),
+        );
         let mut wallet_coins = HashMap::new();
         // Go through all the wallet txos and create a coin for each.
         for ((k, i), full_txo) in wallet_txos {
@@ -219,14 +270,25 @@ impl BdkWallet {
             let derivation_index = i.into();
             let is_change = matches!(k, KeychainType::Change);
             let block_info = match full_txo.chain_position {
-                ChainPosition::Unconfirmed(ls) => {
+                ChainPosition::Unconfirmed {
+                    last_seen: Some(ls),
+                } => {
                     if let Some(last_seen) = last_seen.filter(|last_seen| *last_seen != ls) {
                         log::debug!("Ignoring coin at {}, which was last seen at {} instead of {} as required.", outpoint, ls, last_seen);
                         continue;
                     }
                     None
                 }
-                ChainPosition::Confirmed(anchor) => Some(block_info_from_anchor(anchor)),
+                ChainPosition::Unconfirmed { last_seen: None } => {
+                    log::debug!(
+                        "Ignoring coin at {}, which has never been seen on the best chain.",
+                        outpoint
+                    );
+                    continue;
+                }
+                ChainPosition::Confirmed { anchor, .. } => {
+                    Some(anchor.into_confirmation_block_info())
+                }
             };
 
             // Immature if from a coinbase transaction with less than a hundred confs.
@@ -245,7 +307,9 @@ impl BdkWallet {
             if let Some((spend_pos, txid)) = full_txo.spent_by {
                 spend_txid = Some(txid);
                 match spend_pos {
-                    ChainPosition::Unconfirmed(ls) => {
+                    ChainPosition::Unconfirmed {
+                        last_seen: Some(ls),
+                    } => {
                         if let Some(last_seen) = last_seen.filter(|last_seen| *last_seen != ls) {
                             log::debug!(
                                 "Ignoring spend txid {} for coin at {}, \
@@ -258,8 +322,17 @@ impl BdkWallet {
                             spend_txid = None;
                         }
                     }
-                    ChainPosition::Confirmed(anchor) => {
-                        spend_block = Some(block_info_from_anchor(anchor));
+                    ChainPosition::Unconfirmed { last_seen: None } => {
+                        log::debug!(
+                            "Ignoring spend txid {} for coin at {}, \
+                            which has never been seen on the best chain.",
+                            txid,
+                            outpoint,
+                        );
+                        spend_txid = None;
+                    }
+                    ChainPosition::Confirmed { anchor, .. } => {
+                        spend_block = Some(anchor.into_confirmation_block_info());
                     }
                 };
             }
@@ -293,22 +366,6 @@ impl BdkWallet {
         })
     }
 
-    /// Find the highest block in the local chain whose height is below `height`.
-    ///
-    /// As the local chain will always contain the genesis block, this returns
-    /// `None` only if `height` is 0.
-    pub fn find_block_before_height(&self, height: u32) -> Option<BlockChainTip> {
-        for cp in self.local_chain.iter_checkpoints() {
-            if cp.height() < height {
-                return Some(BlockChainTip {
-                    height: height_i32_from_u32(cp.height()),
-                    hash: cp.hash(),
-                });
-            }
-        }
-        None
-    }
-
     /// Apply an update to the local chain.
     /// Panics if update does not connect to the local chain.
     pub fn apply_connected_chain_update(&mut self, chain_update: CheckPoint) -> ChainChangeSet {
@@ -318,8 +375,13 @@ impl BdkWallet {
     }
 
     /// Apply a graph update.
-    pub fn apply_graph_update(&mut self, graph_update: TxGraph<ConfirmationTimeHeightAnchor>) {
-        let _ = self.graph.apply_update(graph_update);
+    pub fn apply_graph_update_at<A>(&mut self, tx_update: TxUpdate<A>, seen_at: Option<u64>)
+    where
+        A: Ord + Into<ConfirmationTimeHeightAnchor>,
+    {
+        let _ = self
+            .graph
+            .apply_update_at(tx_update.map_anchors(|a| a.into()), seen_at);
     }
 
     /// Apply a keychain update.

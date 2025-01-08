@@ -1,14 +1,17 @@
-use std::{collections::HashSet, convert::TryInto};
+use std::{collections::HashSet, convert::TryInto, sync::Arc};
 
+use bdk_chain::{
+    local_chain::{CheckPoint, LocalChain},
+    TxGraph,
+};
 use bdk_electrum::{
-    bdk_chain::{
+    bdk_core::{
         bitcoin,
-        local_chain::{CheckPoint, LocalChain},
-        spk_client::{FullScanRequest, FullScanResult, SyncRequest, SyncResult},
-        BlockId, ChainPosition, ConfirmationHeightAnchor, TxGraph,
+        spk_client::{FullScanRequest, FullScanResponse, SyncRequest, SyncResponse},
+        BlockId,
     },
     electrum_client::{self, Config, ElectrumApi},
-    ElectrumExt,
+    BdkElectrumClient,
 };
 
 use super::utils::{
@@ -50,7 +53,7 @@ impl std::fmt::Display for Error {
     }
 }
 
-pub struct Client(electrum_client::Client);
+pub struct Client(BdkElectrumClient<electrum_client::Client>);
 
 impl Client {
     /// Create a new client and perform sanity checks.
@@ -70,11 +73,13 @@ impl Client {
         let client =
             bdk_electrum::electrum_client::Client::from_config(&electrum_config.addr, config)
                 .map_err(Error::Server)?;
-        Ok(Self(client))
+        let bdk_electrum_client = BdkElectrumClient::new(client);
+        Ok(Self(bdk_electrum_client))
     }
 
     pub fn chain_tip(&self) -> Result<BlockChainTip, Error> {
         self.0
+            .inner
             .block_headers_subscribe()
             .map_err(Error::Server)
             .map(|notif| BlockChainTip {
@@ -84,7 +89,7 @@ impl Client {
     }
 
     fn genesis_block_header(&self) -> Result<bitcoin::block::Header, Error> {
-        self.0.block_header(0).map_err(Error::Server)
+        self.0.inner.block_header(0).map_err(Error::Server)
     }
 
     pub fn genesis_block_timestamp(&self) -> Result<u32, Error> {
@@ -105,47 +110,39 @@ impl Client {
     pub fn tip_time(&self) -> Result<u32, Error> {
         let tip_height = self.chain_tip()?.height;
         self.0
+            .inner
             .block_header(height_usize_from_i32(tip_height))
             .map_err(Error::Server)
             .map(|bh| bh.time)
     }
 
-    fn sync_with_confirmation_height_anchor(
+    pub fn populate_tx_cache(
         &self,
-        request: SyncRequest,
-        fetch_prev_txouts: bool,
-    ) -> Result<SyncResult<ConfirmationHeightAnchor>, Error> {
-        Ok(self
-            .0
-            .sync(request, DEFAULT_BATCH_SIZE, fetch_prev_txouts)
-            .map_err(Error::Server)?
-            .with_confirmation_height_anchor())
+        txs: impl IntoIterator<Item = impl Into<Arc<bitcoin::Transaction>>>,
+    ) {
+        self.0.populate_tx_cache(txs)
     }
 
-    /// Perform the given `SyncRequest` with `ConfirmationTimeHeightAnchor`.
-    pub fn sync_with_confirmation_time_height_anchor(
+    /// Perform the given `SyncRequest`.
+    pub fn sync<I: 'static>(
         &self,
-        request: SyncRequest,
+        request: SyncRequest<I>,
         fetch_prev_txouts: bool,
-    ) -> Result<SyncResult, Error> {
+    ) -> Result<SyncResponse, Error> {
         self.0
-            .sync(request, DEFAULT_BATCH_SIZE, fetch_prev_txouts)
-            .map_err(Error::Server)?
-            .with_confirmation_time_height_anchor(&self.0)
+            .sync::<I>(request, DEFAULT_BATCH_SIZE, fetch_prev_txouts)
             .map_err(Error::Server)
     }
 
-    /// Perform the given `FullScanRequest` with `ConfirmationTimeHeightAnchor`.
-    pub fn full_scan_with_confirmation_time_height_anchor<K: Ord + Clone>(
+    /// Perform the given `FullScanRequest`.
+    pub fn full_scan<K: Ord + Clone>(
         &self,
         request: FullScanRequest<K>,
         stop_gap: usize,
         fetch_prev_txouts: bool,
-    ) -> Result<FullScanResult<K>, Error> {
+    ) -> Result<FullScanResponse<K>, Error> {
         self.0
             .full_scan(request, stop_gap, DEFAULT_BATCH_SIZE, fetch_prev_txouts)
-            .map_err(Error::Server)?
-            .with_confirmation_time_height_anchor(&self.0)
             .map_err(Error::Server)
     }
 
@@ -173,60 +170,70 @@ impl Client {
                 .expect("only contains genesis block");
         }
         // First, get the tx itself and check it's unconfirmed.
-        let request = SyncRequest::from_chain_tip(local_chain.tip()).chain_txids(txids.clone());
+        let request = SyncRequest::<()>::builder()
+            .chain_tip(local_chain.tip())
+            .txids(txids.clone())
+            .build();
         // We'll get prev txouts for this tx when we find its ancestors below.
-        let sync_result = self.sync_with_confirmation_height_anchor(request, false)?;
-        let _ = local_chain.apply_update(sync_result.chain_update);
+        let sync_result = self.sync(request, false)?;
+        let _ = local_chain.apply_update(
+            sync_result
+                .chain_update
+                .expect("request included chain tip"),
+        );
         // Store local tip after first sync. This will be our reference tip.
-        let local_tip = local_chain.tip();
+        let local_tip_block_id = local_chain.tip().block_id();
         if let Some(ref expected_tip) = expected_tip {
-            if expected_tip != &local_chain.tip() {
+            if expected_tip.block_id() != local_tip_block_id {
                 return Err(Error::TipChanged(
                     expected_tip.block_id(),
-                    local_chain.tip().block_id(),
+                    local_tip_block_id,
                 ));
             }
         }
         let mut desc_ops = Vec::new();
         let mut txs = Vec::new();
-        for txid in &txids {
-            if let Some(ChainPosition::Unconfirmed(_)) = sync_result
-                .graph_update
-                .get_chain_position(&local_chain, local_chain.tip().block_id(), *txid)
-            {
-                let tx = sync_result
-                    .graph_update
-                    .get_tx(*txid)
-                    .expect("we must have tx in graph after sync");
-                desc_ops.extend(outpoints_from_tx(&tx));
-                txs.push(tx);
-            }
-        }
-        let _ = graph.apply_update(sync_result.graph_update);
+        let _ = graph.apply_update(sync_result.tx_update);
+        graph
+            .list_canonical_txs(&local_chain, local_chain.tip().block_id())
+            .for_each(|canon_tx| {
+                if !canon_tx.chain_position.is_confirmed() && txids.contains(&canon_tx.tx_node.txid)
+                {
+                    desc_ops.extend(outpoints_from_tx(&canon_tx.tx_node.tx));
+                    txs.push(canon_tx.tx_node.tx);
+                }
+            });
         // Now iterate over increasing depths of descendants.
         // As they are descendants, we can assume they are all unconfirmed.
         while !desc_ops.is_empty() {
             log::debug!("Syncing descendant outpoints: {:?}", desc_ops);
-            let request = SyncRequest::from_chain_tip(local_chain.tip())
-                .cache_graph_txs(&graph)
-                .chain_outpoints(desc_ops.clone());
+            self.0
+                .populate_tx_cache(graph.full_txs().map(|node| node.tx));
+            let request = SyncRequest::<()>::builder()
+                .chain_tip(local_chain.tip())
+                .outpoints(desc_ops.clone())
+                .build();
             // Fetch prev txouts to ensure we have all required txs in the graph to calculate fees.
             // An unconfirmed descendant may have a confirmed parent that we wouldn't have in our graph.
-            let sync_result = self.sync_with_confirmation_height_anchor(request, true)?;
-            let _ = local_chain.apply_update(sync_result.chain_update);
+            let sync_result = self.sync(request, true)?;
+            let _ = local_chain.apply_update(
+                sync_result
+                    .chain_update
+                    .expect("request included chain tip"),
+            );
             if let Some(ref expected_tip) = expected_tip {
-                if expected_tip != &local_chain.tip() {
+                if expected_tip.block_id() != local_chain.tip().block_id() {
                     return Err(Error::TipChanged(
                         expected_tip.block_id(),
                         local_chain.tip().block_id(),
                     ));
                 }
             }
-            if local_chain.tip() != local_tip {
+            if local_chain.tip().block_id() != local_tip_block_id {
                 log::debug!("Chain tip changed while getting mempool entry. Restarting.");
                 return self.mempool_entries(txids, expected_tip.clone());
             }
-            let _ = graph.apply_update(sync_result.graph_update);
+            let _ = graph.apply_update(sync_result.tx_update);
             // Get any txids spending the outpoints we've just synced against.
             let desc_txids: HashSet<_> = graph
                 .filter_chain_txouts(
@@ -256,49 +263,50 @@ impl Client {
             .collect();
         while !anc_txids.is_empty() {
             log::debug!("Syncing ancestor txids: {:?}", anc_txids);
-            let request = SyncRequest::from_chain_tip(local_chain.tip())
-                .cache_graph_txs(&graph)
-                .chain_txids(anc_txids.clone());
+            self.0
+                .populate_tx_cache(graph.full_txs().map(|node| node.tx));
+            let request = SyncRequest::<()>::builder()
+                .chain_tip(local_chain.tip())
+                .txids(anc_txids.clone())
+                .build();
             // We expect to have prev txouts for all unconfirmed ancestors in our graph so no need to fetch them here.
             // Note we keep iterating through ancestors until we find one that is confirmed and only need to calculate
             // fees for unconfirmed transactions.
-            let sync_result = self.sync_with_confirmation_height_anchor(request, false)?;
-            let _ = local_chain.apply_update(sync_result.chain_update);
+            let sync_result = self.sync(request, false)?;
+            let _ = local_chain.apply_update(
+                sync_result
+                    .chain_update
+                    .expect("request included chain tip"),
+            );
             if let Some(expected_tip) = &expected_tip {
-                if expected_tip != &local_chain.tip() {
+                if expected_tip.block_id() != local_chain.tip().block_id() {
                     return Err(Error::TipChanged(
                         expected_tip.block_id(),
                         local_chain.tip().block_id(),
                     ));
                 }
             }
-            if local_chain.tip() != local_tip {
+            if local_chain.tip().block_id() != local_tip_block_id {
                 log::debug!("Chain tip changed while getting mempool entry. Restarting.");
                 return self.mempool_entries(txids, expected_tip);
             }
-            let _ = graph.apply_update(sync_result.graph_update);
+            let _ = graph.apply_update(sync_result.tx_update);
 
             // Add ancestors of any unconfirmed txs.
-            anc_txids = anc_txids
-                .iter()
-                .filter_map(|anc_txid| {
-                    if let Some(ChainPosition::Unconfirmed(_)) = graph.get_chain_position(
-                        &local_chain,
-                        local_chain.tip().block_id(),
-                        *anc_txid,
-                    ) {
-                        let anc_tx = graph.get_tx(*anc_txid).expect("we must have it");
-                        Some(
-                            anc_tx
-                                .input
-                                .clone()
-                                .iter()
-                                .map(|txin| txin.previous_output.txid)
-                                .collect::<HashSet<_>>(),
-                        )
-                    } else {
-                        None
-                    }
+            anc_txids = graph
+                .list_canonical_txs(&local_chain, local_chain.tip().block_id())
+                .filter_map(|canon_tx| {
+                    (!canon_tx.chain_position.is_confirmed()
+                        && anc_txids.contains(&canon_tx.tx_node.txid))
+                    .then_some(
+                        canon_tx
+                            .tx_node
+                            .tx
+                            .input
+                            .iter()
+                            .map(|txin| txin.previous_output.txid)
+                            .collect::<HashSet<_>>(),
+                    )
                 })
                 .flatten()
                 .collect();
@@ -315,7 +323,9 @@ impl Client {
             let mut anc_fees = base_fee;
             // Ancestor size includes that of `txid`.
             let mut anc_size = base_size;
-            for desc_txid in graph.walk_descendants(tx.txid(), |_, desc_txid| Some(desc_txid)) {
+            for desc_txid in
+                graph.walk_descendants(tx.compute_txid(), |_, desc_txid| Some(desc_txid))
+            {
                 log::debug!("Getting fee for desc txid '{}'.", desc_txid);
                 let desc_tx = graph
                     .get_tx(desc_txid)
@@ -326,26 +336,28 @@ impl Client {
                 desc_fees += fee;
             }
             for anc_tx in graph.walk_ancestors(tx, |_, anc_tx| Some(anc_tx)) {
-                log::debug!("Getting fee and size for anc txid '{}'.", anc_tx.txid());
-                if let Some(ChainPosition::Unconfirmed(_)) = graph.get_chain_position(
-                    &local_chain,
-                    local_chain.tip().block_id(),
-                    anc_tx.txid(),
-                ) {
+                let anc_txid = anc_tx.compute_txid();
+                log::debug!("Getting fee and size for anc txid '{}'.", anc_txid);
+                if graph
+                    .list_canonical_txs(&local_chain, local_chain.tip().block_id())
+                    .find(|canon_tx| canon_tx.tx_node.txid == anc_txid)
+                    .filter(|canon_tx| !canon_tx.chain_position.is_confirmed())
+                    .is_some()
+                {
                     let fee = graph
                         .calculate_fee(&anc_tx)
                         .expect("all required txs are in graph");
                     anc_fees += fee;
                     anc_size += anc_tx.vsize();
                 } else {
-                    log::debug!("Ancestor txid '{}' is not unconfirmed.", anc_tx.txid());
+                    log::debug!("Ancestor txid '{}' is not unconfirmed.", anc_txid);
                     continue;
                 }
             }
             let fees = MempoolEntryFees {
-                base: bitcoin::Amount::from_sat(base_fee),
-                ancestor: bitcoin::Amount::from_sat(anc_fees),
-                descendant: bitcoin::Amount::from_sat(desc_fees),
+                base: base_fee,
+                ancestor: anc_fees,
+                descendant: desc_fees,
             };
             let entry = MempoolEntry {
                 vsize: base_size.try_into().expect("tx size must fit into u64"),
@@ -386,14 +398,21 @@ impl Client {
                 .insert_block(block_id_from_tip(chain_tip))
                 .expect("only contains genesis block");
         }
-        let request =
-            SyncRequest::from_chain_tip(local_chain.tip()).chain_outpoints(outpoints.to_vec());
+        let request = SyncRequest::<()>::builder()
+            .chain_tip(local_chain.tip())
+            .outpoints(outpoints.to_vec())
+            .build();
         // We don't need to fetch prev txouts as we just want the outspends.
-        let sync_result = self.sync_with_confirmation_height_anchor(request, false)?;
-        let _ = local_chain.apply_update(sync_result.chain_update);
+        let sync_result = self.sync(request, false)?;
+        let _ = local_chain.apply_update(
+            sync_result
+                .chain_update
+                .expect("request included chain tip"),
+        );
         // Store tip at which first sync was completed. This will be our reference tip.
         let local_tip = local_chain.tip();
-        let graph = sync_result.graph_update;
+        let mut graph = TxGraph::default();
+        let _ = graph.apply_update(sync_result.tx_update);
         let txids: HashSet<_> = outpoints
             .iter()
             .flat_map(|op| graph.outspends(*op))

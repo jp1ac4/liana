@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use bdk_electrum::bdk_chain::{
+use bdk_chain::{
     bitcoin::{self, bip32::ChildNumber, BlockHash, OutPoint},
+    keychain_txout::SyncRequestBuilderExt,
     local_chain::LocalChain,
     spk_client::{FullScanRequest, SyncRequest},
-    ChainPosition,
 };
 
 pub mod client;
@@ -137,44 +137,54 @@ impl Electrum {
         const FETCH_PREV_TXOUTS: bool = false;
         const STOP_GAP: usize = 200;
 
-        let (chain_update, mut graph_update, keychain_update) = if !self.is_rescanning() {
+        // TODO: cache only the new txs, perhaps after the sync/scan.
+        self.client
+            .populate_tx_cache(self.bdk_wallet.graph().full_txs().map(|node| node.tx));
+        let (chain_update, tx_update, keychain_update) = if !self.is_rescanning() {
             log::debug!("Performing sync.");
-            let mut request = SyncRequest::from_chain_tip(local_chain_tip.clone())
-                .cache_graph_txs(self.bdk_wallet.graph());
-
-            let all_spks: Vec<_> = self
-                .bdk_wallet
-                .index()
-                .inner() // we include lookahead SPKs
-                .all_spks()
-                .iter()
-                .map(|(_, script)| script.clone())
-                .collect();
-            request = request.chain_spks(all_spks);
-            log::debug!("num SPKs for sync: {}", request.spks.len());
-
+            let mut request = SyncRequest::builder().chain_tip(local_chain_tip.clone());
+            request = request.revealed_spks_from_indexer(self.bdk_wallet.index(), ..);
+            // Include lookahead SPKs, e.g. in case they have been revealed by another wallet participant.
+            for (k, _) in self.bdk_wallet.index().keychains() {
+                let (next, _) = self
+                    .bdk_wallet
+                    .index()
+                    .next_index(k)
+                    .expect("keychain exists");
+                log::debug!(
+                    "keychain={:?} next={} lookahead={}",
+                    k,
+                    next,
+                    self.bdk_wallet.index().lookahead()
+                );
+                let lookahead_spks = (0..self.bdk_wallet.index().lookahead()).map(|i| {
+                    let lookahead_idx = next + i;
+                    let s = self
+                        .bdk_wallet
+                        .index()
+                        .spk_at_index(k, lookahead_idx)
+                        .expect("lookahead index has been inserted");
+                    ((k, lookahead_idx), s)
+                });
+                request = request.spks_with_indexes(lookahead_spks);
+            }
             let sync_result = self
                 .client
-                .sync_with_confirmation_time_height_anchor(request, FETCH_PREV_TXOUTS)
+                .sync(request.build(), FETCH_PREV_TXOUTS)
                 .map_err(ElectrumError::Client)?;
             log::debug!("Sync complete.");
-            (sync_result.chain_update, sync_result.graph_update, None)
+            (sync_result.chain_update, sync_result.tx_update, None)
         } else {
             log::info!("Performing full scan.");
             // Either local_chain has height 0 or we want to trigger a full scan.
-            let mut request = FullScanRequest::from_chain_tip(local_chain_tip.clone())
-                .cache_graph_txs(self.bdk_wallet.graph());
+            let mut request = FullScanRequest::builder().chain_tip(local_chain_tip.clone());
 
             for (k, spks) in self.bdk_wallet.index().all_unbounded_spk_iters() {
-                request = request.set_spks_for_keychain(k, spks);
+                request = request.spks_for_keychain(k, spks);
             }
             let scan_result = self
                 .client
-                .full_scan_with_confirmation_time_height_anchor(
-                    request,
-                    STOP_GAP,
-                    FETCH_PREV_TXOUTS,
-                )
+                .full_scan(request.build(), STOP_GAP, FETCH_PREV_TXOUTS)
                 .map_err(ElectrumError::Client)?;
             // A full scan only makes sense to do once, in most cases. Don't do it again unless
             // explicitly asked to by a user.
@@ -182,10 +192,11 @@ impl Electrum {
             log::info!("Full scan complete.");
             (
                 scan_result.chain_update,
-                scan_result.graph_update,
+                scan_result.tx_update,
                 Some(scan_result.last_active_indices),
             )
         };
+        let chain_update = chain_update.expect("request included chain tip");
         log::debug!(
             "chain update height after sync with electrum: {}",
             chain_update.height()
@@ -201,48 +212,38 @@ impl Electrum {
         }
         let changeset = self.bdk_wallet.apply_connected_chain_update(chain_update);
 
-        let mut changes_iter = changeset.into_iter();
-        let reorg_common_ancestor = if let Some((height, _)) = changes_iter.next() {
-            // Either a new block has been added at this height or an existing block in our local
-            // chain has been invalidated.
-            // Since we iterate in ascending height order, we'll see the lowest block height first.
-            // If the lowest height is higher than our height before syncing, we're good.
-            // Else if it's adding/invalidating a block at height before syncing or lower,
-            // it's a reorg.
-            if height > local_chain_tip.height() {
-                None
-            } else {
-                log::info!("Block chain reorganization detected.");
-                // We can assume height is positive as genesis block will not have changed.
-                Some(
-                    self.bdk_wallet
-                        .find_block_before_height(height)
-                        .expect("height of first change is greater than 0"),
-                )
-            }
-        } else {
-            None
-        };
+        // Look for updated/invalidated blocks at or below our height before syncing.
+        // Since we iterate in ascending height order, we'll see the lowest block height first.
+        // Note that the changeset after the first sync may include new blocks below the tip,
+        // e.g. corresponding to confirmation blocks of any existing wallet coins and the most
+        // recent ~8 blocks below the tip, but such new blocks don't imply a reorg.
+        let reorg_common_ancestor = changeset
+            .blocks
+            .into_iter()
+            .filter(|(height, _)| height <= &local_chain_tip.height())
+            .find_map(|(height, _)| {
+                // If our local chain already contains a block at this height, then either the block hash
+                // has been updated or the block has been invalidated, so it's a reorg.
+                local_chain_tip.get(height).map(|_| {
+                    log::info!("Block chain reorganization detected.");
+                    // Return the block in our local chain before this height.
+                    // We must only consider blocks that were in our local chain *before* the sync
+                    // in order to make sure we update all affected coins in the DB.
+                    local_chain_tip
+                        .iter() // in descending height order
+                        .find(|cp| cp.height() < height)
+                        .map(|cp| BlockChainTip {
+                            height: utils::height_i32_from_u32(cp.height()),
+                            hash: cp.hash(),
+                        })
+                        .expect("height > 0 and local chain contains genesis")
+                })
+            });
 
-        // Unconfirmed transactions have their last seen as 0, so we override to the `sync_count`
-        // so that conflicts can be properly handled. We use `sync_count` instead of current time
-        // in seconds to ensure strictly increasing values between poller iterations.
-        for tx in &graph_update.initial_changeset().txs {
-            let txid = tx.txid();
-            if let Some(ChainPosition::Unconfirmed(_)) = graph_update.get_chain_position(
-                self.local_chain(),
-                self.local_chain().tip().block_id(),
-                txid,
-            ) {
-                log::debug!(
-                    "changing last seen for txid '{}' to {}",
-                    txid,
-                    self.sync_count
-                );
-                let _ = graph_update.insert_seen_at(txid, self.sync_count);
-            }
-        }
-        self.bdk_wallet.apply_graph_update(graph_update);
+        // We use `sync_count` instead of current time in seconds for `seen_at`
+        // to ensure strictly increasing values between poller iterations.
+        self.bdk_wallet
+            .apply_graph_update_at(tx_update, Some(self.sync_count));
         Ok(reorg_common_ancestor)
     }
 
