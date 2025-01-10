@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use bdk_electrum::bdk_chain::{
+use bdk_chain::{
     bitcoin::{self, bip32::ChildNumber, BlockHash, OutPoint},
+    keychain_txout::SyncRequestBuilderExt,
     local_chain::LocalChain,
     spk_client::{FullScanRequest, SyncRequest},
-    ChainPosition,
 };
 
 pub mod client;
@@ -137,44 +137,48 @@ impl Electrum {
         const FETCH_PREV_TXOUTS: bool = false;
         const STOP_GAP: usize = 200;
 
-        let (chain_update, mut graph_update, keychain_update) = if !self.is_rescanning() {
+        self.client
+            .populate_tx_cache(self.bdk_wallet.graph().full_txs().map(|node| node.tx));
+        let (chain_update, mut tx_update, keychain_update) = if !self.is_rescanning() {
             log::debug!("Performing sync.");
-            let mut request = SyncRequest::from_chain_tip(local_chain_tip.clone())
-                .cache_graph_txs(self.bdk_wallet.graph());
+            let mut request = SyncRequest::builder().chain_tip(local_chain_tip.clone());
+            request = request.revealed_spks_from_indexer(self.bdk_wallet.index(), ..);
 
-            let all_spks: Vec<_> = self
-                .bdk_wallet
-                .index()
-                .inner() // we include lookahead SPKs
-                .all_spks()
-                .iter()
-                .map(|(_, script)| script.clone())
-                .collect();
-            request = request.chain_spks(all_spks);
-            log::debug!("num SPKs for sync: {}", request.spks.len());
-
+            for (k, last_revealed) in self.bdk_wallet.index().last_revealed_indices() {
+                log::debug!(
+                    "keychain={:?} last_revealed={} lookahead={}",
+                    k,
+                    last_revealed,
+                    self.bdk_wallet.index().lookahead()
+                );
+                let lookahead_spks = (1..=self.bdk_wallet.index().lookahead()).map(|i| {
+                    let lookahead_idx = last_revealed + 1 + i;
+                    let s = self
+                        .bdk_wallet
+                        .index()
+                        .spk_at_index(k, lookahead_idx)
+                        .expect("all lookahead indices have been inserted");
+                    ((k, lookahead_idx), s)
+                });
+                request = request.spks_with_indexes(lookahead_spks);
+            }
             let sync_result = self
                 .client
-                .sync_with_confirmation_time_height_anchor(request, FETCH_PREV_TXOUTS)
+                .sync(request.build(), FETCH_PREV_TXOUTS)
                 .map_err(ElectrumError::Client)?;
             log::debug!("Sync complete.");
-            (sync_result.chain_update, sync_result.graph_update, None)
+            (sync_result.chain_update, sync_result.tx_update, None)
         } else {
             log::info!("Performing full scan.");
             // Either local_chain has height 0 or we want to trigger a full scan.
-            let mut request = FullScanRequest::from_chain_tip(local_chain_tip.clone())
-                .cache_graph_txs(self.bdk_wallet.graph());
+            let mut request = FullScanRequest::builder().chain_tip(local_chain_tip.clone());
 
             for (k, spks) in self.bdk_wallet.index().all_unbounded_spk_iters() {
-                request = request.set_spks_for_keychain(k, spks);
+                request = request.spks_for_keychain(k, spks);
             }
             let scan_result = self
                 .client
-                .full_scan_with_confirmation_time_height_anchor(
-                    request,
-                    STOP_GAP,
-                    FETCH_PREV_TXOUTS,
-                )
+                .full_scan(request.build(), STOP_GAP, FETCH_PREV_TXOUTS)
                 .map_err(ElectrumError::Client)?;
             // A full scan only makes sense to do once, in most cases. Don't do it again unless
             // explicitly asked to by a user.
@@ -182,10 +186,11 @@ impl Electrum {
             log::info!("Full scan complete.");
             (
                 scan_result.chain_update,
-                scan_result.graph_update,
+                scan_result.tx_update,
                 Some(scan_result.last_active_indices),
             )
         };
+        let chain_update = chain_update.expect("request included chain tip");
         log::debug!(
             "chain update height after sync with electrum: {}",
             chain_update.height()
@@ -201,7 +206,7 @@ impl Electrum {
         }
         let changeset = self.bdk_wallet.apply_connected_chain_update(chain_update);
 
-        let mut changes_iter = changeset.into_iter();
+        let mut changes_iter = changeset.blocks.into_iter();
         let reorg_common_ancestor = if let Some((height, _)) = changes_iter.next() {
             // Either a new block has been added at this height or an existing block in our local
             // chain has been invalidated.
@@ -227,22 +232,18 @@ impl Electrum {
         // Unconfirmed transactions have their last seen as 0, so we override to the `sync_count`
         // so that conflicts can be properly handled. We use `sync_count` instead of current time
         // in seconds to ensure strictly increasing values between poller iterations.
-        for tx in &graph_update.initial_changeset().txs {
-            let txid = tx.txid();
-            if let Some(ChainPosition::Unconfirmed(_)) = graph_update.get_chain_position(
-                self.local_chain(),
-                self.local_chain().tip().block_id(),
-                txid,
-            ) {
+        for tx in &tx_update.txs {
+            let txid = tx.compute_txid();
+            if tx_update.anchors.iter().any(|(_, a_txid)| *a_txid == txid) {
                 log::debug!(
                     "changing last seen for txid '{}' to {}",
                     txid,
                     self.sync_count
                 );
-                let _ = graph_update.insert_seen_at(txid, self.sync_count);
+                let _ = tx_update.seen_ats.insert(txid, self.sync_count);
             }
         }
-        self.bdk_wallet.apply_graph_update(graph_update);
+        self.bdk_wallet.apply_graph_update(tx_update);
         Ok(reorg_common_ancestor)
     }
 

@@ -17,7 +17,7 @@ path = "src/main.rs"
 async-trait = "0.1"
 async-hwi = { version = "0.0.25" }
 liana = { git = "https://github.com/wizardsardine/liana", branch = "master" }
-lianad = { path = "../lianad", default-features = false, features = ["nonblocking_shutdown"] }
+lianad = { git = "https://github.com/wizardsardine/liana", branch = "master", default-features = false, features = ["nonblocking_shutdown"] }
 liana-ui = { path = "../liana-ui" }
 backtrace = "0.3"
 hex = "0.4.3"
