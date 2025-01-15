@@ -1269,7 +1269,7 @@ impl SyncProgress {
     }
 
     pub fn is_complete(&self) -> bool {
-        self.rounded_up_progress() == 1.0
+        self.rounded_up_progress() == 1.0 && self.blocks == self.headers
     }
 }
 
