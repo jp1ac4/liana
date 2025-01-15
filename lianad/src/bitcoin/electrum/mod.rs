@@ -137,27 +137,33 @@ impl Electrum {
         const FETCH_PREV_TXOUTS: bool = false;
         const STOP_GAP: usize = 200;
 
+        // TODO: cache only the new txs, perhaps after the sync/scan.
         self.client
             .populate_tx_cache(self.bdk_wallet.graph().full_txs().map(|node| node.tx));
-        let (chain_update, mut tx_update, keychain_update) = if !self.is_rescanning() {
+        let (chain_update, tx_update, keychain_update) = if !self.is_rescanning() {
             log::debug!("Performing sync.");
             let mut request = SyncRequest::builder().chain_tip(local_chain_tip.clone());
             request = request.revealed_spks_from_indexer(self.bdk_wallet.index(), ..);
 
-            for (k, last_revealed) in self.bdk_wallet.index().last_revealed_indices() {
+            for (k, _) in self.bdk_wallet.index().keychains() {
+                let (next, _) = self
+                    .bdk_wallet
+                    .index()
+                    .next_index(k)
+                    .expect("keychain exists");
                 log::debug!(
-                    "keychain={:?} last_revealed={} lookahead={}",
+                    "keychain={:?} next={} lookahead={}",
                     k,
-                    last_revealed,
+                    next,
                     self.bdk_wallet.index().lookahead()
                 );
-                let lookahead_spks = (1..=self.bdk_wallet.index().lookahead()).map(|i| {
-                    let lookahead_idx = last_revealed + 1 + i;
+                let lookahead_spks = (0..self.bdk_wallet.index().lookahead()).map(|i| {
+                    let lookahead_idx = next + i;
                     let s = self
                         .bdk_wallet
                         .index()
                         .spk_at_index(k, lookahead_idx)
-                        .expect("all lookahead indices have been inserted");
+                        .expect("lookahead index has been inserted");
                     ((k, lookahead_idx), s)
                 });
                 request = request.spks_with_indexes(lookahead_spks);
@@ -232,18 +238,19 @@ impl Electrum {
         // Unconfirmed transactions have their last seen as 0, so we override to the `sync_count`
         // so that conflicts can be properly handled. We use `sync_count` instead of current time
         // in seconds to ensure strictly increasing values between poller iterations.
-        for tx in &tx_update.txs {
-            let txid = tx.compute_txid();
-            if tx_update.anchors.iter().any(|(_, a_txid)| *a_txid == txid) {
-                log::debug!(
-                    "changing last seen for txid '{}' to {}",
-                    txid,
-                    self.sync_count
-                );
-                let _ = tx_update.seen_ats.insert(txid, self.sync_count);
-            }
-        }
-        self.bdk_wallet.apply_graph_update(tx_update);
+        self.bdk_wallet
+            .apply_graph_update_at(tx_update, Some(self.sync_count));
+        // for tx in &tx_update.txs {
+        //     let txid = tx.compute_txid();
+        //     if !tx_update.anchors.iter().any(|(_, a_txid)| *a_txid == txid) {
+        //         log::debug!(
+        //             "changing last seen for txid '{}' to {}",
+        //             txid,
+        //             self.sync_count
+        //         );
+        //         let _ = tx_update.seen_ats.insert(txid, self.sync_count);
+        //     }
+        // }
         Ok(reorg_common_ancestor)
     }
 

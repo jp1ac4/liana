@@ -160,7 +160,7 @@ impl BdkWallet {
             }
             let mut graph = TxGraph::default();
             graph.apply_changeset(graph_cs);
-            let _ = bdk_wallet.graph.apply_update(graph.into());
+            let _ = bdk_wallet.graph.apply_update_at(graph.into(), None);
         }
         bdk_wallet
     }
@@ -371,14 +371,19 @@ impl BdkWallet {
     }
 
     /// Apply a graph update.
-    pub fn apply_graph_update(&mut self, tx_update: TxUpdate<ConfirmationBlockTime>) {
-        let _ = self
-            .graph
-            .apply_update(tx_update.map_anchors(|a| ConfirmationTimeHeightAnchor {
+    pub fn apply_graph_update_at(
+        &mut self,
+        tx_update: TxUpdate<ConfirmationBlockTime>,
+        seen_at: Option<u64>,
+    ) {
+        let _ = self.graph.apply_update_at(
+            tx_update.map_anchors(|a| ConfirmationTimeHeightAnchor {
                 confirmation_height: a.block_id.height,
                 confirmation_time: a.confirmation_time,
                 anchor_block: a.block_id,
-            }));
+            }),
+            seen_at,
+        );
     }
 
     /// Apply a keychain update.
