@@ -80,10 +80,10 @@ fn update_coins(
         // First of if we are receiving coins that are beyond our next derivation index,
         // adjust it.
         if derivation_index > db_conn.receive_index() {
-            db_conn.set_receive_index(derivation_index, secp);
+            db_conn.set_receive_index(desc, derivation_index, secp);
         }
         if derivation_index > db_conn.change_index() {
-            db_conn.set_change_index(derivation_index, secp);
+            db_conn.set_change_index(desc, derivation_index, secp);
         }
 
         // Now record this coin as a newly received one.

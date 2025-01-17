@@ -233,6 +233,7 @@ impl DatabaseConnection for DummyDatabase {
 
     fn set_receive_index(
         &mut self,
+        _desc: &descriptors::LianaDescriptor,
         index: bip32::ChildNumber,
         _: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) {
@@ -245,6 +246,7 @@ impl DatabaseConnection for DummyDatabase {
 
     fn set_change_index(
         &mut self,
+        _desc: &descriptors::LianaDescriptor,
         index: bip32::ChildNumber,
         _: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) {

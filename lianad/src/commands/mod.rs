@@ -282,12 +282,12 @@ impl DaemonControl {
                 let next_index = index
                     .increment()
                     .expect("Must not get into hardened territory");
-                db_conn.set_change_index(next_index, &self.secp);
+                db_conn.set_change_index(&self.config.main_descriptor, next_index, &self.secp);
             } else if !is_change && db_conn.receive_index() <= *index {
                 let next_index = index
                     .increment()
                     .expect("Must not get into hardened territory");
-                db_conn.set_receive_index(next_index, &self.secp);
+                db_conn.set_receive_index(&self.config.main_descriptor, next_index, &self.secp);
             }
         }
     }
@@ -339,7 +339,7 @@ impl DaemonControl {
         let new_index = index
             .increment()
             .expect("Can't get into hardened territory");
-        db_conn.set_receive_index(new_index, &self.secp);
+        db_conn.set_receive_index(&self.config.main_descriptor, new_index, &self.secp);
         let address = self
             .config
             .main_descriptor
