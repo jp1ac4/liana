@@ -271,6 +271,7 @@ impl SqliteConn {
     /// former and new gap limit indexes.
     pub fn set_derivation_index(
         &mut self,
+        desc: &LianaDescriptor,
         index: bip32::ChildNumber,
         change: bool,
         secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
@@ -284,6 +285,8 @@ impl SqliteConn {
                 })?
                 .pop()
                 .expect("There is always a row in the wallet table");
+            // Compare as strings to avoid time spent parsing the DB value.
+            assert_eq!(db_wallet.main_descriptor, desc.to_string());
 
             // Make sure we don't set a lower derivation index. This can happen since the
             // derivation is set outside the atomic transaction. So there may be a race between say
@@ -315,7 +318,6 @@ impl SqliteConn {
                 db_wallet.change_derivation_index,
             ).into();
             if index_u32 > curr_highest_index {
-                let desc = LianaDescriptor::from_str(&db_wallet.main_descriptor).expect("we only store valid descriptors");
                 let receive_desc = desc.receive_descriptor();
                 let change_desc = desc.change_descriptor();
 
@@ -1983,7 +1985,7 @@ CREATE TABLE labels (
             assert!(conn.db_address(&addr).is_none());
 
             // But if we increment the deposit derivation index, the 200th one will be there.
-            conn.set_derivation_index(1.into(), false, &secp);
+            conn.set_derivation_index(&options.main_descriptor, 1.into(), false, &secp);
             let db_addr = conn.db_address(&addr).unwrap();
             assert_eq!(db_addr.derivation_index, 200.into());
 
@@ -2005,11 +2007,11 @@ CREATE TABLE labels (
             assert!(conn.db_address(&addr).is_none());
 
             // If we increment the *change* derivation index to 1, it will still not be there.
-            conn.set_derivation_index(1.into(), true, &secp);
+            conn.set_derivation_index(&options.main_descriptor, 1.into(), true, &secp);
             assert!(conn.db_address(&addr).is_none());
 
             // But incrementing it once again it will be there for both change and receive.
-            conn.set_derivation_index(2.into(), true, &secp);
+            conn.set_derivation_index(&options.main_descriptor, 2.into(), true, &secp);
             let db_addr = conn.db_address(&addr).unwrap();
             assert_eq!(db_addr.derivation_index, 201.into());
             let addr = options
@@ -2021,7 +2023,7 @@ CREATE TABLE labels (
             assert_eq!(db_addr.derivation_index, 201.into());
 
             // Now setting it to a much higher will fill all the addresses within the gap
-            conn.set_derivation_index(52.into(), true, &secp);
+            conn.set_derivation_index(&options.main_descriptor, 52.into(), true, &secp);
             for index in 2..52 {
                 let look_ahead_index = 200 + index;
                 let addr = options
@@ -2041,8 +2043,8 @@ CREATE TABLE labels (
             // this is to make sure *within* the atomic DB transaction that we will never decrease
             // the derivation index. Make sure we actually perform this check (note it would only
             // crash during the second call).
-            conn.set_derivation_index(7.into(), true, &secp);
-            conn.set_derivation_index(8.into(), true, &secp);
+            conn.set_derivation_index(&options.main_descriptor, 7.into(), true, &secp);
+            conn.set_derivation_index(&options.main_descriptor, 8.into(), true, &secp);
         }
 
         fs::remove_dir_all(tmp_dir).unwrap();

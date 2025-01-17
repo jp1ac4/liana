@@ -20,6 +20,7 @@ use std::{
     sync,
 };
 
+use liana::descriptors::LianaDescriptor;
 use miniscript::bitcoin::{self, bip32, psbt::Psbt, secp256k1};
 
 /// Information about the wallet.
@@ -75,9 +76,12 @@ pub trait DatabaseConnection {
     /// Get the derivation index for the next receiving address
     fn receive_index(&mut self) -> bip32::ChildNumber;
 
-    /// Set the derivation index for the next receiving address
+    /// Set the derivation index for the next receiving address.
+    ///
+    /// The descriptor `desc` will be used to derive addresses as required.
     fn set_receive_index(
         &mut self,
+        desc: &LianaDescriptor,
         index: bip32::ChildNumber,
         secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     );
@@ -85,9 +89,12 @@ pub trait DatabaseConnection {
     /// Get the derivation index for the next change address
     fn change_index(&mut self) -> bip32::ChildNumber;
 
-    /// Set the derivation index for the next change address
+    /// Set the derivation index for the next change address.
+    ///
+    /// The descriptor `desc` will be used to derive addresses as required.
     fn set_change_index(
         &mut self,
+        desc: &LianaDescriptor,
         index: bip32::ChildNumber,
         secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     );
@@ -233,10 +240,11 @@ impl DatabaseConnection for SqliteConn {
 
     fn set_receive_index(
         &mut self,
+        desc: &LianaDescriptor,
         index: bip32::ChildNumber,
         secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) {
-        self.set_derivation_index(index, false, secp)
+        self.set_derivation_index(desc, index, false, secp)
     }
 
     fn change_index(&mut self) -> bip32::ChildNumber {
@@ -245,10 +253,11 @@ impl DatabaseConnection for SqliteConn {
 
     fn set_change_index(
         &mut self,
+        desc: &LianaDescriptor,
         index: bip32::ChildNumber,
         secp: &secp256k1::Secp256k1<secp256k1::VerifyOnly>,
     ) {
-        self.set_derivation_index(index, true, secp)
+        self.set_derivation_index(desc, index, true, secp)
     }
 
     fn rescan_timestamp(&mut self) -> Option<u32> {
