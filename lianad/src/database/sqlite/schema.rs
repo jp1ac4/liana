@@ -1,5 +1,3 @@
-use liana::descriptors::LianaDescriptor;
-
 use std::{convert::TryFrom, str::FromStr};
 
 use miniscript::bitcoin::{self, address, bip32, consensus::encode, psbt::Psbt};
@@ -146,12 +144,14 @@ impl TryFrom<&rusqlite::Row<'_>> for DbTip {
 }
 
 /// A row in the "wallets" table.
+///
+/// `main_descriptor` is kept as `String` to avoid unnecessary parsing.
 #[derive(Clone, Debug)]
 pub struct DbWallet {
     #[allow(dead_code)]
     pub id: i64,
     pub timestamp: u32,
-    pub main_descriptor: LianaDescriptor,
+    pub main_descriptor: String,
     pub deposit_derivation_index: bip32::ChildNumber,
     pub change_derivation_index: bip32::ChildNumber,
     pub rescan_timestamp: Option<u32>,
@@ -164,11 +164,7 @@ impl TryFrom<&rusqlite::Row<'_>> for DbWallet {
     fn try_from(row: &rusqlite::Row) -> Result<Self, Self::Error> {
         let id = row.get(0)?;
         let timestamp = row.get(1)?;
-
-        let desc_str: String = row.get(2)?;
-        let main_descriptor = LianaDescriptor::from_str(&desc_str)
-            .expect("Insane database: can't parse deposit descriptor");
-
+        let main_descriptor: String = row.get(2)?;
         let der_idx: u32 = row.get(3)?;
         let deposit_derivation_index = bip32::ChildNumber::from(der_idx);
         let der_idx: u32 = row.get(4)?;

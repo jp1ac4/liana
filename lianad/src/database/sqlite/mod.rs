@@ -33,6 +33,7 @@ use std::{
     collections::{HashMap, HashSet},
     convert::TryInto,
     fmt, io, path,
+    str::FromStr,
 };
 
 use miniscript::bitcoin::{
@@ -203,10 +204,10 @@ impl SqliteDb {
 
         // The config and db descriptors must match!
         let db_wallet = conn.db_wallet();
-        if &db_wallet.main_descriptor != main_descriptor {
-            return Err(SqliteDbError::DescriptorMismatch(
-                db_wallet.main_descriptor.into(),
-            ));
+        let db_main_desc = LianaDescriptor::from_str(&db_wallet.main_descriptor)
+            .expect("we only save valid descriptors");
+        if &db_main_desc != main_descriptor {
+            return Err(SqliteDbError::DescriptorMismatch(db_main_desc.into()));
         }
 
         Ok(())
@@ -314,8 +315,9 @@ impl SqliteConn {
                 db_wallet.change_derivation_index,
             ).into();
             if index_u32 > curr_highest_index {
-                let receive_desc = db_wallet.main_descriptor.receive_descriptor();
-                let change_desc = db_wallet.main_descriptor.change_descriptor();
+                let desc = LianaDescriptor::from_str(&db_wallet.main_descriptor).expect("we only store valid descriptors");
+                let receive_desc = desc.receive_descriptor();
+                let change_desc = desc.change_descriptor();
 
                 for index in curr_highest_index + 1..=index_u32 {
                     let la_index = index + LOOK_AHEAD_LIMIT - 1;
