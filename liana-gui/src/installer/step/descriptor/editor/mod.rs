@@ -376,10 +376,16 @@ impl Step for DefineDescriptor {
                 .expect("Must be present at this step");
             if let DescriptorPublicKey::XPub(xpub) = &key.key {
                 if let Some((master_fingerprint, _)) = xpub.origin {
-                    ctx.keys.push(KeySetting {
-                        master_fingerprint,
-                        name: key.name.clone(),
-                    });
+                    if !ctx
+                        .keys
+                        .iter()
+                        .any(|ks| ks.master_fingerprint == master_fingerprint)
+                    {
+                        ctx.keys.push(KeySetting {
+                            master_fingerprint,
+                            name: key.name.clone(),
+                        });
+                    }
                     if key.device_kind.is_some() {
                         hw_is_used = true;
                     }
@@ -405,10 +411,16 @@ impl Step for DefineDescriptor {
                     .expect("Must be present at this step");
                 if let DescriptorPublicKey::XPub(xpub) = &key.key {
                     if let Some((master_fingerprint, _)) = xpub.origin {
-                        ctx.keys.push(KeySetting {
-                            master_fingerprint,
-                            name: key.name.clone(),
-                        });
+                        if !ctx
+                            .keys
+                            .iter()
+                            .any(|ks| ks.master_fingerprint == master_fingerprint)
+                        {
+                            ctx.keys.push(KeySetting {
+                                master_fingerprint,
+                                name: key.name.clone(),
+                            });
+                        }
                         if key.device_kind.is_some() {
                             hw_is_used = true;
                         }
