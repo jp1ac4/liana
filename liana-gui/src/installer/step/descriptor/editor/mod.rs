@@ -163,7 +163,7 @@ impl DefineDescriptor {
                 || (self.use_taproot
                     && path.keys.iter().any(|k| {
                         if let Some(k) = k.and_then(|k| self.keys.get(&k)) {
-                            !k.is_compatible_taproot
+                            !k.source.is_compatible_taproot()
                         } else {
                             false
                         }
@@ -380,7 +380,7 @@ impl Step for DefineDescriptor {
                         master_fingerprint,
                         name: key.name.clone(),
                     });
-                    if key.device_kind.is_some() {
+                    if key.source.device_kind().is_some() {
                         hw_is_used = true;
                     }
                 }
@@ -409,7 +409,7 @@ impl Step for DefineDescriptor {
                             master_fingerprint,
                             name: key.name.clone(),
                         });
-                        if key.device_kind.is_some() {
+                        if key.source.device_kind().is_some() {
                             hw_is_used = true;
                         }
                     }
@@ -788,10 +788,7 @@ mod tests {
             name: "My Specter key".to_string(),
             fingerprint: key.master_fingerprint(),
             key,
-            device_kind: Some(async_hwi::DeviceKind::Specter),
-            device_version: None,
-            is_compatible_taproot: false,
-            is_hot_signer: false,
+            source: key::KeySource::Device(async_hwi::DeviceKind::Specter, None),
         };
 
         // Use Specter device for primary key
