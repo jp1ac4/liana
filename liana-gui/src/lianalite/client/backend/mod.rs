@@ -148,11 +148,23 @@ impl BackendClient {
         &self,
         name: &str,
         descriptor: &LianaDescriptor,
+        provider_keys: &[api::ProviderKey],
     ) -> Result<api::Wallet, DaemonError> {
         let response = self
             .request(Method::POST, &format!("{}/v1/wallets", self.url))
             .await
-            .json(&api::payload::CreateWallet { name, descriptor })
+            .json(&api::payload::CreateWallet {
+                name,
+                descriptor,
+                provider_keys: &provider_keys
+                    .iter()
+                    .map(|pk| api::payload::ProviderKey {
+                        fingerprint: pk.fingerprint.to_string(),
+                        uuid: pk.uuid.clone(),
+                        token: pk.token.clone(),
+                    })
+                    .collect(),
+            })
             .send()
             .await?;
         if !response.status().is_success() {

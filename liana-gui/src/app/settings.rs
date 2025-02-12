@@ -89,12 +89,31 @@ impl WalletSetting {
         }
         map
     }
+
+    pub fn provider_keys(&self) -> HashMap<Fingerprint, ProviderKey> {
+        let mut map = HashMap::new();
+        for (fingerprint, provider_key) in self
+            .keys
+            .iter()
+            .filter_map(|k| k.provider_key.as_ref().map(|pk| (k.master_fingerprint, pk)))
+        {
+            map.insert(fingerprint, provider_key.clone());
+        }
+        map
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct ProviderKey {
+    pub uuid: String,
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct KeySetting {
     pub name: String,
     pub master_fingerprint: Fingerprint,
+    pub provider_key: Option<ProviderKey>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

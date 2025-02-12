@@ -16,7 +16,7 @@ use liana_ui::{component::form, widget::Element};
 use async_hwi::DeviceKind;
 
 use crate::{
-    app::wallet::wallet_name,
+    app::{settings::KeySetting, wallet::wallet_name},
     hw::{HardwareWallet, HardwareWallets},
     installer::{
         message::{self, Message},
@@ -291,7 +291,7 @@ impl From<RegisterDescriptor> for Box<dyn Step> {
 pub struct BackupDescriptor {
     done: bool,
     descriptor: Option<LianaDescriptor>,
-    key_aliases: HashMap<Fingerprint, String>,
+    keys: HashMap<Fingerprint, KeySetting>,
 }
 
 impl Step for BackupDescriptor {
@@ -306,12 +306,11 @@ impl Step for BackupDescriptor {
             self.descriptor.clone_from(&ctx.descriptor);
             self.done = false;
         }
-        self.key_aliases = ctx
+        self.keys = ctx
             .keys
             .iter()
-            .cloned()
-            .map(|k| (k.master_fingerprint, k.name))
-            .collect()
+            .map(|k| (k.master_fingerprint, k.clone()))
+            .collect();
     }
     fn view<'a>(
         &'a self,
@@ -323,7 +322,7 @@ impl Step for BackupDescriptor {
             progress,
             email,
             self.descriptor.as_ref().expect("Must be a descriptor"),
-            &self.key_aliases,
+            &self.keys,
             self.done,
         )
     }

@@ -20,16 +20,18 @@ pub use backend::{ChooseBackend, ImportRemoteWallet, RemoteBackendLogin};
 pub use mnemonic::{BackupMnemonic, RecoverMnemonic};
 pub use share_xpubs::ShareXpubs;
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use iced::{Subscription, Task};
 
 use liana_ui::widget::*;
 
 use crate::{
+    app::settings::ProviderKey,
     hw::HardwareWallets,
     installer::{context::Context, message::Message, view},
     node::bitcoind::Bitcoind,
+    services,
 };
 
 pub trait Step {
@@ -65,6 +67,7 @@ pub struct Final {
     internal_bitcoind: Option<Bitcoind>,
     warning: Option<String>,
     config_path: Option<PathBuf>,
+    key_redemptions: HashMap<ProviderKey, Option<Result<services::api::Key, services::Error>>>,
 }
 
 impl Final {
@@ -74,6 +77,7 @@ impl Final {
             generating: false,
             warning: None,
             config_path: None,
+            key_redemptions: HashMap::new(),
         }
     }
 }
@@ -87,6 +91,11 @@ impl Default for Final {
 impl Step for Final {
     fn load_context(&mut self, ctx: &Context) {
         self.internal_bitcoind.clone_from(&ctx.internal_bitcoind);
+        self.key_redemptions = ctx
+            .keys
+            .iter()
+            .filter_map(|ks| ks.provider_key.as_ref().map(|pk| (pk.clone(), None)))
+            .collect();
     }
     fn load(&self) -> Task<Message> {
         if !self.generating && self.config_path.is_none() {
@@ -97,24 +106,69 @@ impl Step for Final {
     }
     fn update(&mut self, _hws: &mut HardwareWallets, message: Message) -> Task<Message> {
         match message {
-            Message::Installed(res) => {
+            Message::RedeemNextKey => {
+                if let Some((pk, _)) = self.key_redemptions.iter().find(|(_, v)| v.is_none()) {
+                    let client = services::Client::new();
+                    let pk = pk.clone();
+                    return Task::perform(
+                        async move { (pk.clone(), client.redeem_key(pk.uuid, pk.token).await) },
+                        |(pk, res)| Message::KeyRedeemed(pk, res),
+                    );
+                }
+                return Task::perform(async move {}, |_| Message::AllKeysRedeemed);
+            }
+            Message::KeyRedeemed(pk, res) => {
+                if let Some(v) = self.key_redemptions.get_mut(&pk) {
+                    *v = Some(res);
+                }
+                return Task::perform(async move {}, |_| Message::RedeemNextKey);
+            }
+            Message::AllKeysRedeemed => {
                 self.generating = false;
-                match res {
-                    Err(e) => {
-                        self.config_path = None;
-                        self.warning = Some(e.to_string());
-                    }
-                    Ok(path) => {
-                        self.config_path = Some(path.clone());
-                        let internal_bitcoind = self.internal_bitcoind.clone();
-                        let path = path.clone();
-                        return Task::perform(
-                            async { (path, internal_bitcoind) },
-                            |(path, internal_bitcoind)| Message::Exit(path, internal_bitcoind),
-                        );
+                let mut warning = String::new();
+                let mut is_error = false;
+                for (pk, res) in &self.key_redemptions {
+                    if let Some(res) = res {
+                        if let Err(e) = res {
+                            is_error = true;
+                            if !warning.is_empty() {
+                                warning += "\n";
+                            }
+                            warning +=
+                                &format!("Error redeeming key for token {}: {}.", pk.token, e);
+                        }
+                    } else {
+                        // We expect to have all redemption results by now.
+                        self.warning =
+                            Some(format!("Missing redemption info for token {}.", pk.token));
+                        return Task::none();
                     }
                 }
+                if is_error {
+                    self.warning = Some(warning);
+                    return Task::none();
+                }
+                self.warning = None;
+                // All redemptions, if any, have completed successfully. Now exit the installer.
+                let internal_bitcoind = self.internal_bitcoind.clone();
+                let path = self.config_path.clone().expect("config path already set");
+                return Task::perform(
+                    async { (path, internal_bitcoind) },
+                    |(path, internal_bitcoind)| Message::Exit(path, internal_bitcoind),
+                );
             }
+            Message::Installed(res) => match res {
+                Err(e) => {
+                    self.generating = false;
+                    self.config_path = None;
+                    self.warning = Some(e.to_string());
+                }
+                Ok(path) => {
+                    self.config_path = Some(path.clone());
+                    // Now redeem any provider keys.
+                    return Task::perform(async move {}, |_| Message::RedeemNextKey);
+                }
+            },
             Message::Install => {
                 self.generating = true;
                 self.config_path = None;

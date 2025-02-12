@@ -20,15 +20,17 @@ use liana_ui::{
     widget::Element,
 };
 
-use crate::installer::context::DescriptorTemplate;
 use crate::{
     app::settings::KeySetting,
     hw::HardwareWallets,
     installer::{
+        context::DescriptorTemplate,
+        descriptor::{PathKind, PathSequence},
         message::{self, Message},
         step::{Context, Step},
         view,
     },
+    services::api::KeyKind,
     signer::Signer,
 };
 
@@ -50,28 +52,35 @@ pub trait DescriptorEditModal {
 pub struct Path {
     keys: Vec<Option<Fingerprint>>,
     threshold: usize,
-    // sequence is 0 if it is a primary path.
-    sequence: u16,
+    sequence: PathSequence,
     duplicate_sequence: bool,
 }
 
 impl Path {
-    pub fn new_primary_path() -> Self {
+    pub fn new(kind: PathKind) -> Self {
+        let sequence = match kind {
+            PathKind::Primary => PathSequence::Primary,
+            PathKind::Recovery => PathSequence::Recovery(u16::MAX - 1), // reserve MAX for safety net path
+            PathKind::SafetyNet => PathSequence::SafetyNet,
+        };
         Self {
             keys: vec![None],
             threshold: 1,
-            sequence: 0,
+            sequence,
             duplicate_sequence: false,
         }
     }
 
+    pub fn new_primary_path() -> Self {
+        Self::new(PathKind::Primary)
+    }
+
     pub fn new_recovery_path() -> Self {
-        Self {
-            keys: vec![None],
-            threshold: 1,
-            sequence: u16::MAX,
-            duplicate_sequence: false,
-        }
+        Self::new(PathKind::Recovery)
+    }
+
+    pub fn new_safety_net_path() -> Self {
+        Self::new(PathKind::SafetyNet)
     }
 
     pub fn with_n_keys(mut self, n: usize) -> Self {
@@ -89,6 +98,10 @@ impl Path {
             t
         };
         self
+    }
+
+    fn kind(&self) -> PathKind {
+        self.sequence.path_kind()
     }
 
     fn valid(&self) -> bool {
@@ -145,30 +158,47 @@ impl DefineDescriptor {
         let mut all_sequence = HashSet::new();
         let mut duplicate_sequences = HashSet::new();
         for path in &mut self.paths {
-            if all_sequence.contains(&path.sequence) {
-                duplicate_sequences.insert(path.sequence);
+            if all_sequence.contains(&path.sequence.as_u16()) {
+                duplicate_sequences.insert(path.sequence.as_u16());
             } else {
-                all_sequence.insert(path.sequence);
+                all_sequence.insert(path.sequence.as_u16());
             }
         }
 
         for path in &mut self.paths {
-            path.duplicate_sequence = duplicate_sequences.contains(&path.sequence);
+            path.duplicate_sequence = duplicate_sequences.contains(&path.sequence.as_u16());
         }
     }
 
     fn valid(&self) -> bool {
-        !self.paths.iter().any(|path| {
-            !path.valid()
-                || (self.use_taproot
-                    && path.keys.iter().any(|k| {
-                        if let Some(k) = k.and_then(|k| self.keys.get(&k)) {
-                            !k.is_compatible_taproot
-                        } else {
-                            false
-                        }
-                    }))
-        }) && self.paths.len() >= 2
+        if self.paths.len() < 2 {
+            return false;
+        }
+        for path in &self.paths {
+            if !path.valid() {
+                return false;
+            }
+            let mut has_non_cosigner_key = false;
+            for key in self.path_keys(path) {
+                if let Some(key) = key {
+                    if self.use_taproot && !key.source.is_compatible_taproot() {
+                        return false;
+                    }
+                    if !path.kind().can_choose_key_source_kind(&key.source.kind()) {
+                        return false;
+                    }
+                    if key.source.provider_key_kind() != Some(KeyKind::Cosigner) {
+                        has_non_cosigner_key = true;
+                    }
+                } else {
+                    return false;
+                }
+            }
+            if !has_non_cosigner_key {
+                return false;
+            }
+        }
+        true
     }
 
     fn check_setup(&mut self) {
@@ -218,6 +248,11 @@ impl Step for DefineDescriptor {
             Message::DefineDescriptor(message::DefineDescriptor::AddRecoveryPath) => {
                 self.paths.push(Path::new_recovery_path());
             }
+            Message::DefineDescriptor(message::DefineDescriptor::AddSafetyNetPath) => {
+                if !self.paths.iter().any(|p| p.kind() == PathKind::SafetyNet) {
+                    self.paths.push(Path::new_safety_net_path());
+                }
+            }
             Message::DefineDescriptor(message::DefineDescriptor::KeysEdited(coordinate, key)) => {
                 hws.set_alias(key.fingerprint, key.name.clone());
                 for (i, j) in coordinate {
@@ -227,7 +262,10 @@ impl Step for DefineDescriptor {
                 self.modal = None;
                 self.check_setup();
             }
-            Message::DefineDescriptor(message::DefineDescriptor::KeysEdit(coordinate)) => {
+            Message::DefineDescriptor(message::DefineDescriptor::KeysEdit(
+                path_kind,
+                coordinate,
+            )) => {
                 let use_taproot = self.use_taproot;
                 let mut set = HashSet::<Fingerprint>::new();
                 let key = coordinate
@@ -246,6 +284,7 @@ impl Step for DefineDescriptor {
                 }
                 let modal = EditXpubModal::new(
                     use_taproot,
+                    path_kind,
                     set,
                     key,
                     coordinate,
@@ -258,89 +297,97 @@ impl Step for DefineDescriptor {
                 self.modal = Some(Box::new(modal));
                 return cmd;
             }
-            Message::DefineDescriptor(message::DefineDescriptor::Path(i, msg)) => match msg {
-                message::DefinePath::SequenceEdited(seq) => {
-                    self.modal = None;
-                    if let Some(path) = self.paths.get_mut(i) {
-                        path.sequence = seq;
-                    }
-                    self.check_for_duplicate();
-                }
-                message::DefinePath::ThresholdEdited(t) => {
-                    self.modal = None;
-                    if let Some(path) = self.paths.get_mut(i) {
-                        path.threshold = t;
-                    }
-                }
-                message::DefinePath::EditSequence => {
-                    if let Some(path) = self.paths.get(i) {
-                        self.modal = Some(Box::new(EditSequenceModal::new(i, path.sequence)));
-                    }
-                }
-                message::DefinePath::EditThreshold => {
-                    if let Some(path) = self.paths.get(i) {
-                        self.modal = Some(Box::new(EditThresholdModal::new(
-                            i,
-                            (path.threshold, path.keys.len()),
-                        )));
-                    }
-                }
-
-                message::DefinePath::AddKey => {
-                    if let Some(path) = self.paths.get_mut(i) {
-                        path.keys.push(None);
-                        path.threshold += 1;
-                    }
-                }
-                message::DefinePath::Key(j, msg) => match msg {
-                    message::DefineKey::Clipboard(key) => {
-                        return Task::perform(async move { key }, Message::Clibpboard);
-                    }
-
-                    message::DefineKey::Edit => {
-                        let use_taproot = self.use_taproot;
-                        let path = &self.paths[i];
-                        let modal = EditXpubModal::new(
-                            use_taproot,
-                            HashSet::from_iter(path.keys.iter().filter_map(|key| {
-                                if key.is_some() && key != &path.keys[j] {
-                                    *key
-                                } else {
-                                    None
-                                }
-                            })),
-                            path.keys[j].and_then(|f| self.keys.get(&f)).cloned(),
-                            vec![(i, j)],
-                            self.network,
-                            self.signer.clone(),
-                            self.signer_fingerprint,
-                            self.keys.values().cloned().collect(),
-                        );
-                        let cmd = modal.load();
-                        self.modal = Some(Box::new(modal));
-                        return cmd;
-                    }
-                    message::DefineKey::Delete => {
-                        if let Some(path) = self.paths.get_mut(i) {
-                            path.keys.remove(j);
-                            if path.threshold > path.keys.len() {
-                                path.threshold -= 1;
-                            }
-                        }
-                        // Only delete recovery paths.
-                        if i > 0
-                            && self
-                                .paths
-                                .get(i)
-                                .map(|path| path.keys.is_empty())
-                                .unwrap_or(false)
+            Message::DefineDescriptor(message::DefineDescriptor::Path(i, path_kind, msg)) => {
+                match msg {
+                    message::DefinePath::SequenceEdited(seq) => {
+                        self.modal = None;
+                        if let Some(Path {
+                            sequence: PathSequence::Recovery(s),
+                            ..
+                        }) = self.paths.get_mut(i)
                         {
-                            self.paths.remove(i);
+                            *s = seq;
                         }
-                        self.check_setup();
+                        self.check_for_duplicate();
                     }
-                },
-            },
+                    message::DefinePath::ThresholdEdited(t) => {
+                        self.modal = None;
+                        if let Some(path) = self.paths.get_mut(i) {
+                            path.threshold = t;
+                        }
+                    }
+                    message::DefinePath::EditSequence => {
+                        if let Some(path) = self.paths.get(i) {
+                            self.modal = Some(Box::new(EditSequenceModal::new(i, path.sequence)));
+                        }
+                    }
+                    message::DefinePath::EditThreshold => {
+                        if let Some(path) = self.paths.get(i) {
+                            self.modal = Some(Box::new(EditThresholdModal::new(
+                                i,
+                                path_kind,
+                                (path.threshold, path.keys.len()),
+                            )));
+                        }
+                    }
+
+                    message::DefinePath::AddKey => {
+                        if let Some(path) = self.paths.get_mut(i) {
+                            path.keys.push(None);
+                            path.threshold += 1;
+                        }
+                    }
+                    message::DefinePath::Key(j, msg) => match msg {
+                        message::DefineKey::Clipboard(key) => {
+                            return Task::perform(async move { key }, Message::Clibpboard);
+                        }
+
+                        message::DefineKey::Edit => {
+                            let use_taproot = self.use_taproot;
+                            let path = &self.paths[i];
+                            let modal = EditXpubModal::new(
+                                use_taproot,
+                                path.kind(),
+                                HashSet::from_iter(path.keys.iter().filter_map(|key| {
+                                    if key.is_some() && key != &path.keys[j] {
+                                        *key
+                                    } else {
+                                        None
+                                    }
+                                })),
+                                path.keys[j].and_then(|f| self.keys.get(&f)).cloned(),
+                                vec![(i, j)],
+                                self.network,
+                                self.signer.clone(),
+                                self.signer_fingerprint,
+                                self.keys.values().cloned().collect(),
+                            );
+                            let cmd = modal.load();
+                            self.modal = Some(Box::new(modal));
+                            return cmd;
+                        }
+                        message::DefineKey::Delete => {
+                            if let Some(path) = self.paths.get_mut(i) {
+                                path.keys.remove(j);
+                                if path.threshold > path.keys.len() {
+                                    path.threshold -= 1;
+                                }
+                            }
+                            // Only delete non-primary paths.
+                            if i > 0 // we could alternatively check `path_kind != PathKind::Primary`
+                                && self
+                                    .paths
+                                    .get(i)
+                                    .map(|path| path.keys.is_empty())
+                                    .unwrap_or(false)
+                            {
+                                self.paths.remove(i);
+                            }
+                            self.check_setup();
+                        }
+                    },
+                }
+            }
             _ => {
                 if let Some(modal) = &mut self.modal {
                     return modal.update(hws, message);
@@ -379,8 +426,9 @@ impl Step for DefineDescriptor {
                     ctx.keys.push(KeySetting {
                         master_fingerprint,
                         name: key.name.clone(),
+                        provider_key: key.source.provider_key(),
                     });
-                    if key.device_kind.is_some() {
+                    if key.source.device_kind().is_some() {
                         hw_is_used = true;
                     }
                 }
@@ -408,8 +456,9 @@ impl Step for DefineDescriptor {
                         ctx.keys.push(KeySetting {
                             master_fingerprint,
                             name: key.name.clone(),
+                            provider_key: key.source.provider_key(),
                         });
-                        if key.device_kind.is_some() {
+                        if key.source.device_kind().is_some() {
                             hw_is_used = true;
                         }
                     }
@@ -429,7 +478,7 @@ impl Step for DefineDescriptor {
                 PathInfo::Multi(path.threshold, recovery_keys)
             };
 
-            recovery_paths.insert(path.sequence, recovery_keys);
+            recovery_paths.insert(path.sequence.as_u16(), recovery_keys);
         }
 
         if spending_keys.is_empty() {
@@ -476,7 +525,7 @@ impl Step for DefineDescriptor {
                     self.paths[1].keys[0]
                         .as_ref()
                         .and_then(|f| self.keys.get(f)),
-                    self.paths[1].sequence,
+                    self.paths[1].sequence.as_u16(),
                     self.valid(),
                 )
             }
@@ -500,15 +549,30 @@ impl Step for DefineDescriptor {
                     duplicate_sequence: self.paths[0].duplicate_sequence,
                     threshold: self.paths[0].threshold,
                 },
-                &mut self.paths[1..]
+                &mut self.paths[1..].iter().filter_map(|p| {
+                    (p.kind() == PathKind::Recovery).then_some(
+                        view::editor::template::custom::Path {
+                            sequence: p.sequence,
+                            duplicate_sequence: p.duplicate_sequence,
+                            threshold: p.threshold,
+                            keys: self.path_keys(p),
+                        },
+                    )
+                }),
+                self.paths[1..]
                     .iter()
-                    .map(|p| view::editor::template::custom::Path {
-                        sequence: p.sequence,
-                        duplicate_sequence: p.duplicate_sequence,
-                        threshold: p.threshold,
-                        keys: self.path_keys(p),
-                    }),
-                self.paths.len().saturating_sub(1), // subtract 1 for primary path
+                    .filter(|p| p.kind() == PathKind::Recovery)
+                    .count(),
+                self.paths[1..].iter().find_map(|p| {
+                    (p.kind() == PathKind::SafetyNet).then_some(
+                        view::editor::template::custom::Path {
+                            duplicate_sequence: p.duplicate_sequence,
+                            threshold: p.threshold,
+                            keys: self.path_keys(p),
+                            sequence: p.sequence,
+                        },
+                    )
+                }),
                 self.valid(),
             ),
         };
@@ -534,15 +598,17 @@ impl From<DefineDescriptor> for Box<dyn Step> {
 
 pub struct EditSequenceModal {
     path_index: usize,
+    path_kind: PathKind,
     sequence: form::Value<String>,
 }
 
 impl EditSequenceModal {
-    pub fn new(path_index: usize, sequence: u16) -> Self {
+    pub fn new(path_index: usize, path_sequence: PathSequence) -> Self {
         Self {
             path_index,
+            path_kind: path_sequence.path_kind(),
             sequence: form::Value {
-                value: sequence.to_string(),
+                value: path_sequence.as_u16().to_string(),
                 valid: true,
             },
         }
@@ -571,11 +637,13 @@ impl DescriptorEditModal for EditSequenceModal {
                     if self.sequence.valid {
                         if let Ok(sequence) = u16::from_str(&self.sequence.value) {
                             let path_index = self.path_index;
+                            let path_kind = self.path_kind;
                             return Task::perform(
-                                async move { (path_index, sequence) },
-                                |(path_index, sequence)| {
+                                async move { (path_index, path_kind, sequence) },
+                                |(path_index, path_kind, sequence)| {
                                     message::DefineDescriptor::Path(
                                         path_index,
+                                        path_kind,
                                         message::DefinePath::SequenceEdited(sequence),
                                     )
                                 },
@@ -598,13 +666,15 @@ impl DescriptorEditModal for EditSequenceModal {
 pub struct EditThresholdModal {
     threshold: (usize, usize),
     path_index: usize,
+    path_kind: PathKind,
 }
 
 impl EditThresholdModal {
-    pub fn new(path_index: usize, threshold: (usize, usize)) -> Self {
+    pub fn new(path_index: usize, path_kind: PathKind, threshold: (usize, usize)) -> Self {
         Self {
             threshold,
             path_index,
+            path_kind,
         }
     }
 }
@@ -626,12 +696,14 @@ impl DescriptorEditModal for EditThresholdModal {
                 }
                 message::ThresholdSequenceModal::Confirm => {
                     let path_index = self.path_index;
+                    let path_kind = self.path_kind;
                     let threshold = self.threshold.0;
                     return Task::perform(
-                        async move { (path_index, threshold) },
-                        |(path_index, threshold)| {
+                        async move { (path_index, path_kind, threshold) },
+                        |(path_index, path_kind, threshold)| {
                             message::DefineDescriptor::Path(
                                 path_index,
+                                path_kind,
                                 message::DefinePath::ThresholdEdited(threshold),
                             )
                         },
@@ -656,6 +728,8 @@ mod tests {
     use iced_runtime::{task::into_stream, Action};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+
+    use crate::installer::descriptor::KeySource;
 
     pub struct Sandbox<S: Step> {
         step: Arc<Mutex<S>>,
@@ -706,6 +780,7 @@ mod tests {
         sandbox
             .update(Message::DefineDescriptor(message::DefineDescriptor::Path(
                 0,
+                PathKind::Primary,
                 message::DefinePath::Key(0, message::DefineKey::Edit),
             )))
             .await;
@@ -729,6 +804,7 @@ mod tests {
         sandbox
             .update(Message::DefineDescriptor(message::DefineDescriptor::Path(
                 1,
+                PathKind::Recovery,
                 message::DefinePath::SequenceEdited(1000),
             )))
             .await;
@@ -737,6 +813,7 @@ mod tests {
         sandbox
             .update(Message::DefineDescriptor(message::DefineDescriptor::Path(
                 1,
+                PathKind::Recovery,
                 message::DefinePath::Key(0, message::DefineKey::Edit),
             )))
             .await;
@@ -788,10 +865,7 @@ mod tests {
             name: "My Specter key".to_string(),
             fingerprint: key.master_fingerprint(),
             key,
-            device_kind: Some(async_hwi::DeviceKind::Specter),
-            device_version: None,
-            is_compatible_taproot: false,
-            is_hot_signer: false,
+            source: KeySource::Device(async_hwi::DeviceKind::Specter, None),
         };
 
         // Use Specter device for primary key
@@ -805,6 +879,7 @@ mod tests {
         sandbox
             .update(Message::DefineDescriptor(message::DefineDescriptor::Path(
                 1,
+                PathKind::Recovery,
                 message::DefinePath::Key(0, message::DefineKey::Edit),
             )))
             .await;
@@ -836,6 +911,7 @@ mod tests {
         sandbox
             .update(Message::DefineDescriptor(message::DefineDescriptor::Path(
                 0,
+                PathKind::Primary,
                 message::DefinePath::Key(0, message::DefineKey::Edit),
             )))
             .await;

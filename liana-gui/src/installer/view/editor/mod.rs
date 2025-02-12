@@ -24,8 +24,9 @@ use liana_ui::{
 };
 
 use crate::installer::{
+    descriptor::{KeySourceKind, PathKind, PathSequence},
     message::{self, Message},
-    prompt,
+    prompt, services,
     view::defined_sequence,
     Error,
 };
@@ -89,7 +90,7 @@ pub fn define_descriptor_advanced_settings<'a>(use_taproot: bool) -> Element<'a,
 pub fn path(
     color: iced::Color,
     title: Option<String>,
-    sequence: u16,
+    sequence: PathSequence,
     duplicate_sequence: bool,
     threshold: usize,
     keys: Vec<Element<message::DefinePath>>,
@@ -119,8 +120,15 @@ pub fn path(
                         .spacing(10)
                         .push(defined_threshold(color, fixed, (threshold, keys_len)))
                         .push(
-                            button::secondary(Some(icon::plus_icon()), "Add key")
-                                .on_press(message::DefinePath::AddKey),
+                            button::secondary(
+                                Some(icon::plus_icon()),
+                                if sequence.path_kind() == PathKind::SafetyNet {
+                                    "Add Safety Net key"
+                                } else {
+                                    "Add key"
+                                },
+                            )
+                            .on_press(message::DefinePath::AddKey),
                         ),
                 )
             }),
@@ -251,19 +259,94 @@ pub fn undefined_key<'a>(
     .into()
 }
 
+fn maybe_key_from_token<'a>(
+    path_kind: PathKind,
+    chosen_key_source_kind: Option<&KeySourceKind>,
+    has_chosen_signer: bool,
+    form_token: &form::Value<String>,
+    key_kind: services::api::KeyKind,
+) -> Option<Element<'a, Message>> {
+    if !path_kind.can_choose_key_source_kind(&KeySourceKind::Token(key_kind)) {
+        None
+    } else {
+        Some(
+            match (chosen_key_source_kind, has_chosen_signer) {
+                (Some(KeySourceKind::Token(key_kind)), false) => card::simple(
+                    Column::new()
+                        .spacing(10)
+                        .push(
+                            Row::new()
+                                .align_y(Alignment::Center)
+                                .push(
+                                    p1_regular(format!("Enter a {key_kind} token:"))
+                                        .width(Length::Fill),
+                                )
+                                .push(image::success_mark_icon().width(Length::Fixed(50.0))),
+                        )
+                        .push(
+                            Row::new()
+                                .push(
+                                    form::Form::new("", form_token, |msg| {
+                                        Message::DefineDescriptor(
+                                            message::DefineDescriptor::KeyModal(
+                                                message::ImportKeyModal::TokenEdited(msg),
+                                            ),
+                                        )
+                                    })
+                                    .warning("Duplicate token")
+                                    .size(text::P1_SIZE)
+                                    .padding(10),
+                                )
+                                .push(button::primary(None, "Confirm").on_press_maybe(
+                                    (!form_token.value.is_empty() && form_token.valid).then_some(
+                                        Message::DefineDescriptor(
+                                            message::DefineDescriptor::KeyModal(
+                                                message::ImportKeyModal::ConfirmToken,
+                                            ),
+                                        ),
+                                    ),
+                                ))
+                                .spacing(10),
+                        ),
+                ),
+                _ => Container::new(
+                    Button::new(
+                        Row::new()
+                            .align_y(Alignment::Center)
+                            .spacing(10)
+                            .push(icon::import_icon())
+                            .push(p1_regular(format!("Enter a {key_kind} token"))),
+                    )
+                    .padding(20)
+                    .width(Length::Fill)
+                    .on_press(Message::DefineDescriptor(
+                        message::DefineDescriptor::KeyModal(message::ImportKeyModal::UseToken(
+                            key_kind,
+                        )),
+                    ))
+                    .style(theme::button::secondary),
+                ),
+            }
+            .into(),
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn edit_key_modal<'a>(
     title: &'a str,
     network: bitcoin::Network,
+    path_kind: PathKind,
     hws: Vec<Element<'a, Message>>,
     keys: Vec<Element<'a, Message>>,
     error: Option<&Error>,
     chosen_signer: Option<Fingerprint>,
+    chosen_key_source_kind: Option<&KeySourceKind>,
     hot_signer_fingerprint: &Fingerprint,
     signer_alias: Option<&'a String>,
     form_name: &'a form::Value<String>,
     form_xpub: &form::Value<String>,
-    manually_imported_xpub: bool,
+    form_token: &form::Value<String>,
     duplicate_master_fg: bool,
 ) -> Element<'a, Message> {
     let content = Column::new()
@@ -280,26 +363,27 @@ pub fn edit_key_modal<'a>(
                 )
                 .push(
                     Column::new()
-                        .push(p1_regular("Select the signing device for your key"))
+                        .push(p1_regular("Select the source of your key"))
                         .spacing(10)
-                        .push(
-                            Column::with_children(hws).spacing(10)
-                        )
-                        .push(
-                            Column::with_children(keys).spacing(10)
-                        )
-                        .push(
-                            Button::new(if Some(*hot_signer_fingerprint) == chosen_signer {
+                        .push(Column::with_children(hws).spacing(10))
+                        .push(Column::with_children(keys).spacing(10))
+                        .push_maybe(if !path_kind.can_choose_key_source_kind(&KeySourceKind::HotSigner) {
+                            None
+                        } else {
+                            Some(Button::new(if Some(*hot_signer_fingerprint) == chosen_signer {
                                 hw::selected_hot_signer(hot_signer_fingerprint, signer_alias)
                             } else {
                                 hw::unselected_hot_signer(hot_signer_fingerprint, signer_alias)
                             })
                             .width(Length::Fill)
                             .on_press(Message::UseHotSigner)
-                            .style(theme::button::secondary),
+                            .style(theme::button::secondary))
+                        }
                         )
-                        .push(if manually_imported_xpub {
-                                card::simple(Column::new()
+                        .push_maybe(if !path_kind.can_choose_key_source_kind(&KeySourceKind::Manual) {
+                            None
+                        } else if chosen_key_source_kind == Some(&KeySourceKind::Manual) && chosen_signer.is_none() {
+                                Some(card::simple(Column::new()
                                     .spacing(10)
                                     .push(
                                         Row::new()
@@ -326,25 +410,27 @@ pub fn edit_key_modal<'a>(
                                                     .padding(10),
                                             )
                                             .spacing(10)
-                                    ))
-                                    } else {
-                                    Container::new(
-                                            Button::new(
-                                            Row::new()
-                                                .align_y(Alignment::Center)
-                                                .spacing(10)
-                                                .push(icon::import_icon())
-                                                .push(p1_regular("Enter an extended public key"))
-                                            )
-                                            .padding(20)
-                                            .width(Length::Fill)
-                                            .on_press(Message::DefineDescriptor(
-                                                    message::DefineDescriptor::KeyModal(message::ImportKeyModal::ManuallyImportXpub)
-                                            ))
-                                            .style(theme::button::secondary),
-                                    )
+                                    )))
+                                } else {
+                                    Some(Container::new(
+                                        Button::new(
+                                        Row::new()
+                                            .align_y(Alignment::Center)
+                                            .spacing(10)
+                                            .push(icon::import_icon())
+                                            .push(p1_regular("Enter an extended public key"))
+                                        )
+                                        .padding(20)
+                                        .width(Length::Fill)
+                                        .on_press(Message::DefineDescriptor(
+                                                message::DefineDescriptor::KeyModal(message::ImportKeyModal::ManuallyImportXpub)
+                                        ))
+                                        .style(theme::button::secondary),
+                                ))
                                 }
-                        )
+                            )
+                            .push_maybe(maybe_key_from_token(path_kind, chosen_key_source_kind, chosen_signer.is_some(), form_token, services::api::KeyKind::SafetyNet))
+                            .push_maybe(maybe_key_from_token(path_kind, chosen_key_source_kind, chosen_signer.is_some(), form_token, services::api::KeyKind::Cosigner))
                         .width(Length::Fill),
                 )
                 .push_maybe(
@@ -382,14 +468,16 @@ pub fn edit_key_modal<'a>(
                 .push(
                     button::primary(None, "Apply")
                         .on_press_maybe(if !duplicate_master_fg
-                            && (!manually_imported_xpub || form_xpub.valid)
-                            && !form_name.value.is_empty() && form_name.valid {
-                            Some(Message::DefineDescriptor(
-                                message::DefineDescriptor::KeyModal(
-                                    message::ImportKeyModal::ConfirmXpub,
-                                ),
-                            ))
-                        } else {None})
+                            && !form_name.value.is_empty() && form_name.valid
+                            && chosen_signer.is_some() {
+                                Some(Message::DefineDescriptor(
+                                    message::DefineDescriptor::KeyModal(
+                                        message::ImportKeyModal::ConfirmXpub,
+                                    )
+                                ))
+                            } else {
+                                None
+                            })
                         .width(Length::Fixed(200.0))
                 )
                 .align_x(Alignment::Center),

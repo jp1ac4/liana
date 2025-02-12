@@ -11,6 +11,7 @@ use liana_ui::{
 };
 
 use crate::installer::{
+    descriptor::{PathKind, PathSequence},
     message::{self, Message},
     step::descriptor::editor::key::Key,
     view::{
@@ -49,7 +50,7 @@ pub fn custom_template_description(progress: (usize, usize)) -> Element<'static,
 
 pub struct Path<'a> {
     pub keys: Vec<Option<&'a Key>>,
-    pub sequence: u16,
+    pub sequence: PathSequence,
     pub duplicate_sequence: bool,
     pub threshold: usize,
 }
@@ -60,6 +61,7 @@ pub fn custom_template<'a>(
     primary_path: Path<'a>,
     recovery_paths: &mut dyn Iterator<Item = Path<'a>>,
     num_recovery_paths: usize,
+    safety_net_path: Option<Path<'a>>,
     valid: bool,
 ) -> Element<'a, Message> {
     let prim_keys_fixed = primary_path.keys.len() < 2; // can only delete a primary key if there are 2 or more
@@ -110,7 +112,7 @@ pub fn custom_template<'a>(
                                     &key.name,
                                     color::GREEN,
                                     "Primary key",
-                                    if use_taproot && !key.is_compatible_taproot {
+                                    if use_taproot && !key.source.is_compatible_taproot() {
                                         Some("This device does not support Taproot")
                                     } else {
                                         None
@@ -130,7 +132,13 @@ pub fn custom_template<'a>(
                         .collect(),
                     false,
                 )
-                .map(|msg| Message::DefineDescriptor(message::DefineDescriptor::Path(0, msg))),
+                .map(|msg| {
+                    Message::DefineDescriptor(message::DefineDescriptor::Path(
+                        0,
+                        PathKind::Primary,
+                        msg,
+                    ))
+                }),
             )
             .push(recovery_paths.into_iter().enumerate().fold(
                 Column::new().spacing(20),
@@ -147,14 +155,17 @@ pub fn custom_template<'a>(
                                 .enumerate()
                                 .map(|(j, recovery_key)| {
                                     // We cannot delete a key if doing so would remove all recovery paths,
-                                    // i.e. if there is only 1 recovery path and it contains only 1 key.
-                                    let fixed = num_recovery_paths < 2 && p.keys.len() < 2;
+                                    // i.e. if there is only 1 recovery path and it contains only 1 key,
+                                    // and there is no safety net path.
+                                    let fixed = num_recovery_paths < 2
+                                        && p.keys.len() < 2
+                                        && safety_net_path.is_none();
                                     if let Some(key) = recovery_key {
                                         defined_key(
                                             &key.name,
                                             color::ORANGE,
                                             "Recovery key",
-                                            if use_taproot && !key.is_compatible_taproot {
+                                            if use_taproot && !key.source.is_compatible_taproot() {
                                                 Some("This device does not support Taproot")
                                             } else {
                                                 None
@@ -175,7 +186,11 @@ pub fn custom_template<'a>(
                             false,
                         )
                         .map(move |msg| {
-                            Message::DefineDescriptor(message::DefineDescriptor::Path(i + 1, msg))
+                            Message::DefineDescriptor(message::DefineDescriptor::Path(
+                                i + 1,
+                                p.sequence.path_kind(),
+                                msg,
+                            ))
                         }),
                     )
                 },
@@ -189,12 +204,70 @@ pub fn custom_template<'a>(
                                 message::DefineDescriptor::AddRecoveryPath,
                             )),
                     )
-                    .push(Space::with_width(Length::Fill))
-                    .push(
-                        button::primary(None, "Continue")
-                            .width(Length::Fixed(200.0))
-                            .on_press_maybe(if valid { Some(Message::Next) } else { None }),
+                    .push_maybe(
+                        safety_net_path.is_none().then_some(
+                            button::secondary(Some(icon::plus_icon()), "Add Safety Net")
+                                .width(Length::Fixed(210.0))
+                                .on_press(Message::DefineDescriptor(
+                                    message::DefineDescriptor::AddSafetyNetPath,
+                                )),
+                        ),
                     ),
+            )
+            .push_maybe(safety_net_path.as_ref().map(move |sn_path| {
+                path(
+                    color::WHITE,
+                    Some("Safety Net:".to_string()),
+                    sn_path.sequence,
+                    sn_path.duplicate_sequence,
+                    sn_path.threshold,
+                    sn_path
+                        .keys
+                        .iter()
+                        .enumerate()
+                        .map(|(i, sn_key)| {
+                            // Cannot delete safety net key if doing so would remove the safety net path
+                            // and there are no other recovery paths.
+                            let fixed = num_recovery_paths == 0 && sn_path.keys.len() < 2;
+                            if let Some(key) = sn_key {
+                                defined_key(
+                                    &key.name,
+                                    color::WHITE,
+                                    "Safety Net key",
+                                    if use_taproot && !key.source.is_compatible_taproot() {
+                                        Some("This key source does not support Taproot")
+                                    } else {
+                                        None
+                                    },
+                                    fixed,
+                                )
+                            } else {
+                                undefined_key(
+                                    color::WHITE,
+                                    "Safety Net key",
+                                    !sn_path.keys[0..i].iter().any(|k| k.is_none()),
+                                    fixed,
+                                )
+                            }
+                            .map(move |msg| message::DefinePath::Key(i, msg))
+                        })
+                        .collect(),
+                    false,
+                )
+                .map(move |msg| {
+                    Message::DefineDescriptor(message::DefineDescriptor::Path(
+                        1 + num_recovery_paths,
+                        PathKind::SafetyNet,
+                        msg,
+                    ))
+                })
+            }))
+            .push(
+                Row::new().push(Space::with_width(Length::Fill)).push(
+                    button::primary(None, "Continue")
+                        .width(Length::Fixed(200.0))
+                        .on_press_maybe(if valid { Some(Message::Next) } else { None }),
+                ),
             )
             .push(Space::with_height(100.0))
             .spacing(20),
