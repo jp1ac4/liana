@@ -42,14 +42,44 @@ pub fn new_multixkey_from_xpub(
 }
 
 #[derive(Debug, Clone)]
+pub enum KeySource {
+    Device(DeviceKind, Option<Version>),
+    HotSigner,
+    Imported,
+}
+
+impl KeySource {
+    pub fn device_kind(&self) -> Option<&DeviceKind> {
+        if let KeySource::Device(ref device_kind, _) = self {
+            Some(device_kind)
+        } else {
+            None
+        }
+    }
+
+    pub fn device_version(&self) -> Option<&Version> {
+        if let KeySource::Device(_, ref version) = self {
+            version.as_ref()
+        } else {
+            None
+        }
+    }
+
+    pub fn is_compatible_taproot(&self) -> bool {
+        if let KeySource::Device(ref device_kind, ref version) = self {
+            is_compatible_with_tapminiscript(device_kind, version.as_ref())
+        } else {
+            true
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Key {
-    pub device_kind: Option<DeviceKind>,
-    pub is_hot_signer: bool,
-    pub device_version: Option<Version>,
+    pub source: KeySource,
     pub name: String,
     pub fingerprint: Fingerprint,
     pub key: DescriptorPublicKey,
-    pub is_compatible_taproot: bool,
 }
 
 pub fn check_key_network(key: &DescriptorPublicKey, network: Network) -> bool {
@@ -107,7 +137,7 @@ impl EditXpubModal {
         // The xpub is manually imported if the key is neither from a device or the hot signer.
         let manually_imported_xpub = key
             .as_ref()
-            .map(|k| !k.is_hot_signer && k.device_kind.is_none())
+            .map(|k| matches!(k.source, KeySource::Imported))
             .unwrap_or(false);
         Self {
             device_must_support_tapminiscript,
@@ -186,17 +216,13 @@ impl super::DescriptorEditModal for EditXpubModal {
                                     Ok(key) => {
                                         if check_key_network(&key, network) {
                                             Ok(Key {
-                                                is_hot_signer: false,
+                                                source: KeySource::Device(
+                                                    device_kind,
+                                                    device_version,
+                                                ),
                                                 fingerprint,
                                                 name: "".to_string(),
                                                 key,
-                                                is_compatible_taproot:
-                                                    is_compatible_with_tapminiscript(
-                                                        &device_kind,
-                                                        device_version.as_ref(),
-                                                    ),
-                                                device_kind: Some(device_kind),
-                                                device_version,
                                             })
                                         } else {
                                             Err(Error::Unexpected(
@@ -228,13 +254,10 @@ impl super::DescriptorEditModal for EditXpubModal {
                         .get_extended_pubkey(&derivation_path)
                 );
                 self.chosen_signer = Some(Key {
-                    is_hot_signer: true,
+                    source: KeySource::HotSigner,
                     fingerprint,
                     name: "".to_string(),
                     key: DescriptorPublicKey::from_str(&key_str).unwrap(),
-                    is_compatible_taproot: true,
-                    device_kind: None,
-                    device_version: None,
                 });
                 self.form_name.value = self
                     .keys
@@ -289,13 +312,10 @@ impl super::DescriptorEditModal for EditXpubModal {
                             };
                             if self.form_xpub.valid {
                                 self.chosen_signer = Some(Key {
-                                    is_hot_signer: false,
+                                    source: KeySource::Imported,
                                     fingerprint,
                                     name: "".to_string(),
                                     key: DescriptorPublicKey::XPub(key),
-                                    is_compatible_taproot: true,
-                                    device_kind: None,
-                                    device_version: None,
                                 });
                                 self.form_name.value = "".to_string();
                                 self.form_name.valid = true;
@@ -380,8 +400,8 @@ impl super::DescriptorEditModal for EditXpubModal {
                             i,
                             &key.name,
                             &key.fingerprint,
-                            key.device_kind.as_ref(),
-                            key.device_version.as_ref(),
+                            key.source.device_kind(),
+                            key.source.device_version(),
                             Some(key.fingerprint) == chosen_signer,
                             self.device_must_support_tapminiscript,
                         ))
