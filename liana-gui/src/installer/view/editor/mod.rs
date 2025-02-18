@@ -24,6 +24,7 @@ use liana_ui::{
 };
 
 use crate::installer::{
+    descriptor::KeySourceKind,
     message::{self, Message},
     prompt,
     view::defined_sequence,
@@ -263,9 +264,11 @@ pub fn edit_key_modal<'a>(
     signer_alias: Option<&'a String>,
     form_name: &'a form::Value<String>,
     form_xpub: &form::Value<String>,
-    manually_imported_xpub: bool,
+    key_source_kind: Option<&KeySourceKind>,
     duplicate_master_fg: bool,
 ) -> Element<'a, Message> {
+    let manually_imported_xpub =
+        key_source_kind.is_some_and(|kind| matches!(kind, KeySourceKind::Manual));
     let content = Column::new()
         .padding(25)
         .push_maybe(error.map(|e| card::error("Failed to import xpub", e.to_string())))

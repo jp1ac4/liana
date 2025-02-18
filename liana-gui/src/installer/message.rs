@@ -146,8 +146,10 @@ pub enum ImportKeyModal {
     XPubEdited(String),
     NameEdited(String),
     ManuallyImportXpub,
+    UseToken,
     ConfirmXpub,
     SelectKey(usize),
+    TokenEdited(String),
 }
 
 #[derive(Debug, Clone)]
