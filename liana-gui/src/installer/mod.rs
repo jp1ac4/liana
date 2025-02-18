@@ -1,4 +1,5 @@
 mod context;
+mod descriptor;
 mod message;
 mod prompt;
 mod step;
@@ -35,6 +36,7 @@ use crate::{
     signer::Signer,
 };
 
+pub use descriptor::{KeySource, KeySourceKind};
 pub use message::Message;
 use step::{
     BackupDescriptor, BackupMnemonic, ChooseBackend, ChooseDescriptorTemplate, DefineDescriptor,

@@ -657,6 +657,8 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
+    use crate::installer::descriptor::KeySource;
+
     pub struct Sandbox<S: Step> {
         step: Arc<Mutex<S>>,
     }
@@ -788,7 +790,7 @@ mod tests {
             name: "My Specter key".to_string(),
             fingerprint: key.master_fingerprint(),
             key,
-            source: key::KeySource::Device(async_hwi::DeviceKind::Specter, None),
+            source: KeySource::Device(async_hwi::DeviceKind::Specter, None),
         };
 
         // Use Specter device for primary key
