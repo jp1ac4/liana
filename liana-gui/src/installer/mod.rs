@@ -36,7 +36,7 @@ use crate::{
     signer::Signer,
 };
 
-pub use descriptor::{KeySource, KeySourceKind};
+pub use descriptor::{get_token_resource, KeySource, KeySourceKind, PathKind, PathSequence};
 pub use message::Message;
 use step::{
     BackupDescriptor, BackupMnemonic, ChooseBackend, ChooseDescriptorTemplate, DefineDescriptor,

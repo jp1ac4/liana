@@ -95,6 +95,7 @@ impl WalletSetting {
 pub struct KeySetting {
     pub name: String,
     pub master_fingerprint: Fingerprint,
+    pub token: Option<String>, // TODO: change to struct/enum with more info about token
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

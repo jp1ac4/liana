@@ -117,6 +117,7 @@ impl Wallet {
                             .map(|(master_fingerprint, name)| settings::KeySetting {
                                 name,
                                 master_fingerprint,
+                                token: None, // FIXME
                             })
                             .collect(),
                         descriptor_checksum: self.descriptor_checksum(),

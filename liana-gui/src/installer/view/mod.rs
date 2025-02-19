@@ -31,6 +31,7 @@ use liana_ui::{
 use crate::{
     hw::{is_compatible_with_tapminiscript, HardwareWallet, UnsupportedReason},
     installer::{
+        descriptor::PathSequence,
         message::{self, DefineBitcoind, DefineNode, Message},
         prompt,
         step::{DownloadState, InstallState},
@@ -1488,15 +1489,15 @@ pub fn defined_threshold<'a>(
 }
 
 pub fn defined_sequence<'a>(
-    sequence: u16,
+    sequence: PathSequence,
     duplicate_sequence: bool,
 ) -> Element<'a, message::DefinePath> {
-    let (n_years, n_months, n_days, n_hours, n_minutes) = duration_from_sequence(sequence);
+    let (n_years, n_months, n_days, n_hours, n_minutes) = duration_from_sequence(sequence.as_u16());
     Container::new(
         Column::new()
             .spacing(5)
-            .push(if sequence != 0 {
-                Row::new().align_y(Alignment::Center).push(
+            .push(match sequence {
+                PathSequence::Recovery(_) => Row::new().align_y(Alignment::Center).push(
                     Container::new(
                         Row::new()
                             .align_y(Alignment::Center)
@@ -1539,14 +1540,53 @@ pub fn defined_sequence<'a>(
                     .width(Length::Fill)
                     .padding(5)
                     .align_y(alignment::Vertical::Center),
-                )
-            } else {
-                Row::new()
+                ),
+                PathSequence::Primary => Row::new()
                     .push(
                         p1_regular("Able to move the funds at any time.")
                             .style(theme::text::secondary),
                     )
+                    .padding(5),
+                PathSequence::SafetyNet => Row::new().align_y(Alignment::Center).push(
+                    Container::new(
+                        Row::new()
+                            .align_y(Alignment::Center)
+                            .spacing(5)
+                            .push(
+                                text::p1_regular("Available after inactivity of ~")
+                                    .style(theme::text::secondary),
+                            )
+                            .push(
+                                // Button::new(
+                                Row::new()
+                                    .padding(5)
+                                    .spacing(5)
+                                    .align_y(Alignment::Center)
+                                    .push(text(
+                                        [
+                                            (n_years, "y"),
+                                            (n_months, "m"),
+                                            (n_days, "d"),
+                                            (n_hours, "h"),
+                                            (n_minutes, "mn"),
+                                        ]
+                                        .iter()
+                                        .filter_map(|(n, unit)| {
+                                            if *n > 0 {
+                                                Some(format!("{}{}", n, unit))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect::<Vec<String>>()
+                                        .join(" "),
+                                    )),
+                            ),
+                    )
+                    .width(Length::Fill)
                     .padding(5)
+                    .align_y(alignment::Vertical::Center),
+                ),
             })
             .push_maybe(if duplicate_sequence {
                 Some(

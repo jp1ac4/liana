@@ -12,6 +12,7 @@ use liana_ui::{
 
 use crate::installer::{
     context,
+    descriptor::{PathKind, PathSequence},
     message::{self, Message},
     step::descriptor::editor::key::Key,
     view::{
@@ -106,7 +107,7 @@ pub fn inheritance_template<'a>(
                 path(
                     color::GREEN,
                     None,
-                    0,
+                    PathSequence::Primary,
                     false,
                     1,
                     vec![if let Some(key) = primary_key {
@@ -127,13 +128,19 @@ pub fn inheritance_template<'a>(
                     .map(|msg| message::DefinePath::Key(0, msg))],
                     true,
                 )
-                .map(|msg| Message::DefineDescriptor(message::DefineDescriptor::Path(0, msg))),
+                .map(|msg| {
+                    Message::DefineDescriptor(message::DefineDescriptor::Path(
+                        0,
+                        PathKind::Primary,
+                        msg,
+                    ))
+                }),
             )
             .push(
                 path(
                     color::WHITE,
                     None,
-                    sequence,
+                    PathSequence::Recovery(sequence),
                     false,
                     1,
                     vec![if let Some(key) = recovery_key {
@@ -154,7 +161,13 @@ pub fn inheritance_template<'a>(
                     .map(|msg| message::DefinePath::Key(0, msg))],
                     true,
                 )
-                .map(|msg| Message::DefineDescriptor(message::DefineDescriptor::Path(1, msg))),
+                .map(|msg| {
+                    Message::DefineDescriptor(message::DefineDescriptor::Path(
+                        1,
+                        PathKind::Recovery,
+                        msg,
+                    ))
+                }),
             )
             .push(
                 Row::new()

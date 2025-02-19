@@ -389,6 +389,7 @@ async fn update_keys_aliases(
                 .map(|(master_fingerprint, name)| settings::KeySetting {
                     master_fingerprint: *master_fingerprint,
                     name: name.clone(),
+                    token: None, // FIXME
                 })
                 .collect();
         }

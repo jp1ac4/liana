@@ -12,6 +12,7 @@ use liana_ui::{
 
 use crate::installer::{
     context,
+    descriptor::{PathKind, PathSequence},
     message::{self, Message},
     step::descriptor::editor::key::Key,
     view::{
@@ -79,7 +80,8 @@ pub fn multisig_security_template<'a>(
     use_taproot: bool,
     primary_keys: Vec<Option<&'a Key>>,
     recovery_keys: Vec<Option<&'a Key>>,
-    sequence: u16,
+    safety_net_keys: Vec<Option<&'a Key>>,
+    sequence: PathSequence,
     threshold: usize,
     valid: bool,
 ) -> Element<'a, Message> {
@@ -117,7 +119,7 @@ pub fn multisig_security_template<'a>(
                 path(
                     color::GREEN,
                     None,
-                    0,
+                    PathSequence::Primary,
                     false,
                     primary_keys.len(),
                     primary_keys
@@ -151,12 +153,16 @@ pub fn multisig_security_template<'a>(
                 )
                 .map(move |msg| {
                     if let message::DefinePath::Key(i, message::DefineKey::Edit) = msg {
-                        Message::DefineDescriptor(message::DefineDescriptor::KeysEdit(vec![
-                            (0, i),
-                            (1, i),
-                        ]))
+                        Message::DefineDescriptor(message::DefineDescriptor::KeysEdit(
+                            PathKind::Primary,
+                            vec![(0, i), (1, i)],
+                        ))
                     } else {
-                        Message::DefineDescriptor(message::DefineDescriptor::Path(0, msg))
+                        Message::DefineDescriptor(message::DefineDescriptor::Path(
+                            0,
+                            PathKind::Primary,
+                            msg,
+                        ))
                     }
                 }),
             )
@@ -216,14 +222,23 @@ pub fn multisig_security_template<'a>(
                 )
                 .map(move |msg| {
                     if let message::DefinePath::Key(i, message::DefineKey::Edit) = msg {
-                        Message::DefineDescriptor(message::DefineDescriptor::KeysEdit(if i < 2 {
-                            vec![(0, i), (1, i)]
-                        } else {
+                        let (path_kind, keys) = if i < 2 {
+                            (PathKind::Primary, vec![(0, i), (1, i)])
+                        } else if i < 5 {
                             // recovery path is the path with three keys
-                            vec![(1, i)]
-                        }))
+                            (PathKind::Recovery, vec![(1, i)])
+                        } else {
+                            (PathKind::SafetyNet, vec![(2, i)])
+                        };
+                        Message::DefineDescriptor(message::DefineDescriptor::KeysEdit(
+                            path_kind, keys,
+                        ))
                     } else {
-                        Message::DefineDescriptor(message::DefineDescriptor::Path(1, msg))
+                        Message::DefineDescriptor(message::DefineDescriptor::Path(
+                            1,
+                            PathKind::Recovery,
+                            msg,
+                        ))
                     }
                 }),
             )

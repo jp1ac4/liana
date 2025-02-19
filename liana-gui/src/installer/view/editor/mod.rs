@@ -24,7 +24,7 @@ use liana_ui::{
 };
 
 use crate::installer::{
-    descriptor::KeySourceKind,
+    descriptor::{KeySourceKind, PathKind, PathSequence, TokenKind},
     message::{self, Message},
     prompt,
     view::defined_sequence,
@@ -90,7 +90,7 @@ pub fn define_descriptor_advanced_settings<'a>(use_taproot: bool) -> Element<'a,
 pub fn path(
     color: iced::Color,
     title: Option<String>,
-    sequence: u16,
+    sequence: PathSequence,
     duplicate_sequence: bool,
     threshold: usize,
     keys: Vec<Element<message::DefinePath>>,
@@ -256,19 +256,19 @@ pub fn undefined_key<'a>(
 pub fn edit_key_modal<'a>(
     title: &'a str,
     network: bitcoin::Network,
+    path_kind: PathKind,
     hws: Vec<Element<'a, Message>>,
     keys: Vec<Element<'a, Message>>,
     error: Option<&Error>,
     chosen_signer: Option<Fingerprint>,
+    chosen_key_source_kind: Option<&KeySourceKind>,
     hot_signer_fingerprint: &Fingerprint,
     signer_alias: Option<&'a String>,
     form_name: &'a form::Value<String>,
     form_xpub: &form::Value<String>,
-    key_source_kind: Option<&KeySourceKind>,
+    form_token: &form::Value<String>,
     duplicate_master_fg: bool,
 ) -> Element<'a, Message> {
-    let manually_imported_xpub =
-        key_source_kind.is_some_and(|kind| matches!(kind, KeySourceKind::Manual));
     let content = Column::new()
         .padding(25)
         .push_maybe(error.map(|e| card::error("Failed to import xpub", e.to_string())))
@@ -283,26 +283,27 @@ pub fn edit_key_modal<'a>(
                 )
                 .push(
                     Column::new()
-                        .push(p1_regular("Select the signing device for your key"))
+                        .push(p1_regular("Select the source of your key"))
                         .spacing(10)
-                        .push(
-                            Column::with_children(hws).spacing(10)
-                        )
-                        .push(
-                            Column::with_children(keys).spacing(10)
-                        )
-                        .push(
-                            Button::new(if Some(*hot_signer_fingerprint) == chosen_signer {
+                        .push(Column::with_children(hws).spacing(10))
+                        .push(Column::with_children(keys).spacing(10))
+                        .push_maybe(if !path_kind.can_choose_key_source_kind(&KeySourceKind::HotSigner) {
+                            None
+                        } else {
+                            Some(Button::new(if Some(*hot_signer_fingerprint) == chosen_signer {
                                 hw::selected_hot_signer(hot_signer_fingerprint, signer_alias)
                             } else {
                                 hw::unselected_hot_signer(hot_signer_fingerprint, signer_alias)
                             })
                             .width(Length::Fill)
                             .on_press(Message::UseHotSigner)
-                            .style(theme::button::secondary),
+                            .style(theme::button::secondary))
+                        }
                         )
-                        .push(if manually_imported_xpub {
-                                card::simple(Column::new()
+                        .push_maybe(if !path_kind.can_choose_key_source_kind(&KeySourceKind::Manual) {
+                            None
+                        } else if chosen_key_source_kind == Some(&KeySourceKind::Manual) && chosen_signer.is_none() {
+                                Some(card::simple(Column::new()
                                     .spacing(10)
                                     .push(
                                         Row::new()
@@ -329,25 +330,145 @@ pub fn edit_key_modal<'a>(
                                                     .padding(10),
                                             )
                                             .spacing(10)
-                                    ))
-                                    } else {
-                                    Container::new(
-                                            Button::new(
-                                            Row::new()
-                                                .align_y(Alignment::Center)
-                                                .spacing(10)
-                                                .push(icon::import_icon())
-                                                .push(p1_regular("Enter an extended public key"))
+                                    )))
+                                } else {
+                                    Some(Container::new(
+                                        Button::new(
+                                        Row::new()
+                                            .align_y(Alignment::Center)
+                                            .spacing(10)
+                                            .push(icon::import_icon())
+                                            .push(p1_regular("Enter an extended public key"))
+                                        )
+                                        .padding(20)
+                                        .width(Length::Fill)
+                                        .on_press(Message::DefineDescriptor(
+                                                message::DefineDescriptor::KeyModal(message::ImportKeyModal::ManuallyImportXpub)
+                                        ))
+                                        .style(theme::button::secondary),
+                                ))
+                                }
+                            )
+                            .push_maybe(
+                                if !path_kind.can_choose_key_source_kind(&KeySourceKind::Token(TokenKind::SafetyNet)) {
+                                    None
+                                } else {
+                                    Some(
+                                        match (chosen_key_source_kind, chosen_signer) {
+                                            (Some(KeySourceKind::Token(TokenKind::SafetyNet)), None) => {
+                                                card::simple(Column::new()
+                                                    .spacing(10)
+                                                    .push(
+                                                        Row::new()
+                                                            .align_y(Alignment::Center)
+                                                            .push(p1_regular("Enter a Safety Net token:").width(Length::Fill))
+                                                            .push(image::success_mark_icon().width(Length::Fixed(50.0)))
+                                                    )
+                                                    .push(
+                                                        Row::new()
+                                                            .push(
+                                                                form::Form::new_trimmed(
+                                                                    "MY_SN_TOKEN_123",
+                                                                    form_token, |msg| {
+                                                                        Message::DefineDescriptor(
+                                                                            message::DefineDescriptor::KeyModal(
+                                                                                message::ImportKeyModal::TokenEdited(msg),),)
+                                                                    })
+                                                                    .warning("Please enter correct safety net token")
+                                                                    .size(text::P1_SIZE)
+                                                                    .padding(10),
+                                                            )
+                                                            .push(
+                                                                button::primary(None, "Confirm")
+                                                                .on_press_maybe(
+                                                                (!form_token.value.is_empty() && form_token.valid).then_some(Message::DefineDescriptor(
+                                                        message::DefineDescriptor::KeyModal(
+                                                            message::ImportKeyModal::ConfirmToken,
+                                                        ),
+                                                    ))
+                                                            )
+                                                    ).spacing(10)))
+                                                },
+                                                _ => {
+                                                Container::new(
+                                                    Button::new(
+                                                    Row::new()
+                                                        .align_y(Alignment::Center)
+                                                        .spacing(10)
+                                                        .push(icon::import_icon())
+                                                        .push(p1_regular("Enter a safety net token"))
+                                                    )
+                                                    .padding(20)
+                                                    .width(Length::Fill)
+                                                    .on_press(Message::DefineDescriptor(
+                                                            message::DefineDescriptor::KeyModal(message::ImportKeyModal::UseToken(TokenKind::SafetyNet))
+                                                    ))
+                                                    .style(theme::button::secondary),
                                             )
-                                            .padding(20)
-                                            .width(Length::Fill)
-                                            .on_press(Message::DefineDescriptor(
-                                                    message::DefineDescriptor::KeyModal(message::ImportKeyModal::ManuallyImportXpub)
-                                            ))
-                                            .style(theme::button::secondary),
+                                            }}
                                     )
                                 }
-                        )
+                            )
+                            .push_maybe(
+                                if !path_kind.can_choose_key_source_kind(&KeySourceKind::Token(TokenKind::Cosigner)) {
+                                    None
+                                } else {
+                                    Some(
+                                        match (chosen_key_source_kind, chosen_signer) {
+                                            (Some(KeySourceKind::Token(TokenKind::Cosigner)), None) => {
+                                                card::simple(Column::new()
+                                                    .spacing(10)
+                                                    .push(
+                                                        Row::new()
+                                                            .align_y(Alignment::Center)
+                                                            .push(p1_regular("Enter a Cosigner token:").width(Length::Fill))
+                                                            .push(image::success_mark_icon().width(Length::Fixed(50.0)))
+                                                    )
+                                                    .push(
+                                                        Row::new()
+                                                            .push(
+                                                                form::Form::new_trimmed(
+                                                                    "MY_COSIGNER_TOKEN_123",
+                                                                    form_token, |msg| {
+                                                                        Message::DefineDescriptor(
+                                                                            message::DefineDescriptor::KeyModal(
+                                                                                message::ImportKeyModal::TokenEdited(msg),),)
+                                                                    })
+                                                                    .warning("Please enter correct cosigner token")
+                                                                    .size(text::P1_SIZE)
+                                                                    .padding(10),
+                                                            )
+                                                            .push(
+                                                                button::primary(None, "Confirm")
+                                                                .on_press_maybe(
+                                                                (!form_token.value.is_empty() && form_token.valid).then_some(Message::DefineDescriptor(
+                                                        message::DefineDescriptor::KeyModal(
+                                                            message::ImportKeyModal::ConfirmToken,
+                                                        ),
+                                                    ))
+                                                            )
+                                                    ).spacing(10)))
+                                                },
+                                                _ => {
+                                                Container::new(
+                                                    Button::new(
+                                                    Row::new()
+                                                        .align_y(Alignment::Center)
+                                                        .spacing(10)
+                                                        .push(icon::import_icon())
+                                                        .push(p1_regular("Enter a cosigner token"))
+                                                    )
+                                                    .padding(20)
+                                                    .width(Length::Fill)
+                                                    .on_press(Message::DefineDescriptor(
+                                                            message::DefineDescriptor::KeyModal(message::ImportKeyModal::UseToken(TokenKind::Cosigner))
+                                                    ))
+                                                    .style(theme::button::secondary),
+                                            )
+                                            }}
+                                    )
+                                }
+                            )
                         .width(Length::Fill),
                 )
                 .push_maybe(
@@ -385,14 +506,16 @@ pub fn edit_key_modal<'a>(
                 .push(
                     button::primary(None, "Apply")
                         .on_press_maybe(if !duplicate_master_fg
-                            && (!manually_imported_xpub || form_xpub.valid)
-                            && !form_name.value.is_empty() && form_name.valid {
-                            Some(Message::DefineDescriptor(
-                                message::DefineDescriptor::KeyModal(
-                                    message::ImportKeyModal::ConfirmXpub,
-                                ),
-                            ))
-                        } else {None})
+                            && !form_name.value.is_empty() && form_name.valid
+                            && chosen_signer.is_some() {
+                                Some(Message::DefineDescriptor(
+                                    message::DefineDescriptor::KeyModal(
+                                        message::ImportKeyModal::ConfirmXpub,
+                                    )
+                                ))
+                            } else {
+                                None
+                            })
                         .width(Length::Fixed(200.0))
                 )
                 .align_x(Alignment::Center),
@@ -624,4 +747,17 @@ mod threshsold_input {
             component(numeric_input)
         }
     }
+}
+
+pub fn activate_safety_net_row<'a>() -> Element<'a, Message> {
+    Row::new()
+        .push(
+            button::secondary(Some(icon::plus_icon()), "Use activation token")
+                .width(Length::Fixed(210.0))
+                .on_press(Message::DefineDescriptor(
+                    message::DefineDescriptor::AddSafetyNetPath,
+                )),
+        )
+        .push(Space::with_width(Length::Fill))
+        .into()
 }

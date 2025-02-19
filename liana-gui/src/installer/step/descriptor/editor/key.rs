@@ -17,7 +17,7 @@ use liana_ui::{component::form, widget::Element};
 use crate::{
     hw::{HardwareWallet, HardwareWallets},
     installer::{
-        descriptor::{KeySource, KeySourceKind},
+        descriptor::{get_token_resource, KeySource, KeySourceKind, PathKind, TokenResource},
         message::{self, Message},
         view, Error,
     },
@@ -46,6 +46,12 @@ pub struct Key {
     pub name: String,
     pub fingerprint: Fingerprint,
     pub key: DescriptorPublicKey,
+}
+
+impl Key {
+    pub fn can_edit_name(&self) -> bool {
+        !matches!(self.source, KeySource::Token(_))
+    }
 }
 
 pub fn check_key_network(key: &DescriptorPublicKey, network: Network) -> bool {
@@ -78,21 +84,23 @@ pub struct EditXpubModal {
     form_name: form::Value<String>,
     form_xpub: form::Value<String>,
     form_token: form::Value<String>,
-    key_source_kind: Option<KeySourceKind>,
 
     other_path_keys: HashSet<Fingerprint>,
     duplicate_master_fg: bool,
 
+    path_kind: PathKind,
     keys: Vec<Key>,
     hot_signer: Arc<Mutex<Signer>>,
     hot_signer_fingerprint: Fingerprint,
     chosen_signer: Option<Key>,
+    chosen_key_source_kind: Option<KeySourceKind>,
 }
 
 impl EditXpubModal {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         device_must_support_tapminiscript: bool,
+        path_kind: PathKind,
         other_path_keys: HashSet<Fingerprint>,
         key: Option<Key>,
         keys_coordinate: Vec<(usize, usize)>,
@@ -103,6 +111,7 @@ impl EditXpubModal {
     ) -> Self {
         Self {
             device_must_support_tapminiscript,
+            path_kind,
             other_path_keys,
             form_name: form::Value {
                 valid: true,
@@ -121,20 +130,20 @@ impl EditXpubModal {
                 value: key
                     .as_ref()
                     .and_then(|k| {
-                        if let KeySource::Token(ref token, _) = k.source {
-                            Some(token.clone())
+                        if let KeySource::Token(ref tr) = k.source {
+                            Some(tr.token.clone())
                         } else {
                             None
                         }
                     })
                     .unwrap_or_default(),
             },
-            key_source_kind: key.as_ref().map(|k| k.source.to_kind()),
             keys,
             keys_coordinate,
             processing: false,
             error: None,
             network,
+            chosen_key_source_kind: key.as_ref().map(|k| k.source.kind()),
             chosen_signer: key,
             hot_signer_fingerprint,
             hot_signer,
@@ -168,7 +177,7 @@ impl super::DescriptorEditModal for EditXpubModal {
                 }) = hws.list.get(i)
                 {
                     self.processing = true;
-                    self.key_source_kind = Some(KeySourceKind::Device);
+                    self.chosen_key_source_kind = Some(KeySourceKind::Device);
                     let device_version = version.clone();
                     let fingerprint = *fingerprint;
                     let device_kind = *kind;
@@ -216,7 +225,7 @@ impl super::DescriptorEditModal for EditXpubModal {
                 return self.load();
             }
             Message::UseHotSigner => {
-                self.key_source_kind = Some(KeySourceKind::HotSigner);
+                self.chosen_key_source_kind = Some(KeySourceKind::HotSigner);
                 let fingerprint = self.hot_signer.lock().unwrap().fingerprint();
                 let derivation_path = default_derivation_path(self.network);
                 let key_str = format!(
@@ -264,12 +273,12 @@ impl super::DescriptorEditModal for EditXpubModal {
                 }
                 message::ImportKeyModal::ManuallyImportXpub => {
                     self.chosen_signer = None;
-                    self.key_source_kind = Some(KeySourceKind::Manual);
+                    self.chosen_key_source_kind = Some(KeySourceKind::Manual);
                     self.form_xpub = form::Value::default();
                 }
-                message::ImportKeyModal::UseToken => {
+                message::ImportKeyModal::UseToken(kind) => {
                     self.chosen_signer = None;
-                    self.key_source_kind = Some(KeySourceKind::Token);
+                    self.chosen_key_source_kind = Some(KeySourceKind::Token(kind));
                     self.form_token = form::Value::default();
                 }
                 message::ImportKeyModal::NameEdited(name) => {
@@ -281,7 +290,10 @@ impl super::DescriptorEditModal for EditXpubModal {
                 }
                 message::ImportKeyModal::TokenEdited(s) => {
                     self.chosen_signer = None;
-                    self.form_token.valid = !s.is_empty(); // TODO: do we expect a particular format?
+                    // TODO: do we expect a particular format?
+                    // We check if the token has already been fetched and saved regardless of its kind.
+                    self.form_token.valid = !s.is_empty()
+                    && !self.keys.iter().any(|k| matches!(k.source.clone(), KeySource::Token(TokenResource { token: t, ..}) if t == s));
                     self.form_token.value = s;
                 }
                 message::ImportKeyModal::XPubEdited(s) => {
@@ -330,11 +342,59 @@ impl super::DescriptorEditModal for EditXpubModal {
                         }
                     }
                 }
+                message::ImportKeyModal::ConfirmToken => {
+                    // We have checked that the token has not already been fetched and saved.
+                    let token = self.form_token.value.clone();
+                    let network = self.network;
+                    let chosen_key_source_kind = self.chosen_key_source_kind.clone();
+                    return Task::perform(
+                        async move {
+                            (
+                                network,
+                                chosen_key_source_kind,
+                                get_token_resource(token).await,
+                            )
+                        },
+                        |(network, chosen_key_source_kind, res)| {
+                            Message::DefineDescriptor(message::DefineDescriptor::KeyModal(
+                                message::ImportKeyModal::FetchedKey(match res {
+                                    Err(_e) => Err(Error::Unexpected("fix me".to_string())),
+                                    Ok(ref tr) => {
+                                        if chosen_key_source_kind
+                                            != Some(KeySourceKind::Token(tr.kind))
+                                        {
+                                            Err(Error::Unexpected(
+                                                "Wrong kind of token".to_string(),
+                                            ))
+                                        } else if !check_key_network(&tr.key, network) {
+                                            Err(Error::Unexpected(
+                                                "Fetched key does not have the correct network"
+                                                    .to_string(),
+                                            ))
+                                        } else {
+                                            Ok(Key {
+                                                source: KeySource::Token(tr.clone()),
+                                                fingerprint: tr.fingerprint,
+                                                name: tr.provider_name.clone(),
+                                                key: tr.key.clone(),
+                                            })
+                                        }
+                                    }
+                                }),
+                            ))
+                        },
+                    );
+                }
                 message::ImportKeyModal::SelectKey(i) => {
                     if let Some(key) = self.keys.get(i) {
                         self.chosen_signer = Some(key.clone());
+                        self.chosen_key_source_kind = Some(key.source.kind());
                         self.form_name.value.clone_from(&key.name);
                         self.form_name.valid = true;
+                        // if let KeySource::Token(TokenResource { token, .. }) = &key.source {
+                        //     self.form_token.value = token.clone();
+                        //     self.form_token.valid = true;
+                        // }
                     }
                 }
             },
@@ -352,6 +412,7 @@ impl super::DescriptorEditModal for EditXpubModal {
         view::editor::edit_key_modal(
             "Set your key",
             self.network,
+            self.path_kind,
             hws.list
                 .iter()
                 .enumerate()
@@ -360,6 +421,9 @@ impl super::DescriptorEditModal for EditXpubModal {
                         .keys
                         .iter()
                         .any(|k| Some(k.fingerprint) == hw.fingerprint())
+                        || !self
+                            .path_kind
+                            .can_choose_key_source_kind(&KeySourceKind::Device)
                     {
                         None
                     } else {
@@ -378,7 +442,11 @@ impl super::DescriptorEditModal for EditXpubModal {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, key)| {
-                    if key.fingerprint == self.hot_signer_fingerprint {
+                    if key.fingerprint == self.hot_signer_fingerprint
+                        || !self
+                            .path_kind
+                            .can_choose_key_source_kind(&key.source.kind())
+                    {
                         None
                     } else {
                         Some(view::key_list_view(
@@ -395,6 +463,7 @@ impl super::DescriptorEditModal for EditXpubModal {
                 .collect(),
             self.error.as_ref(),
             self.chosen_signer.as_ref().map(|s| s.fingerprint),
+            self.chosen_key_source_kind.as_ref(),
             &self.hot_signer_fingerprint,
             self.keys.iter().find_map(|k| {
                 if k.fingerprint == self.hot_signer_fingerprint {
@@ -405,7 +474,7 @@ impl super::DescriptorEditModal for EditXpubModal {
             }),
             &self.form_name,
             &self.form_xpub,
-            self.key_source_kind.as_ref(),
+            &self.form_token,
             self.duplicate_master_fg,
         )
     }

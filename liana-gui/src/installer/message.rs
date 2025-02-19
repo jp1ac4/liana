@@ -8,7 +8,10 @@ use super::{context, Error};
 use crate::{
     download::{DownloadError, Progress},
     hw::HardwareWalletMessage,
-    installer::step::descriptor::editor::key::Key,
+    installer::{
+        descriptor::{PathKind, TokenKind},
+        step::descriptor::editor::key::Key,
+    },
     lianalite::client::{auth::AuthClient, backend::api},
     node::{
         bitcoind::{Bitcoind, ConfigField, RpcAuthType},
@@ -114,9 +117,10 @@ pub enum DefineDescriptor {
     ChangeTemplate(context::DescriptorTemplate),
     ImportDescriptor(String),
     KeysEdited(Vec<(usize, usize)>, Key),
-    KeysEdit(Vec<(usize, usize)>),
-    Path(usize, DefinePath),
+    KeysEdit(PathKind, Vec<(usize, usize)>),
+    Path(usize, PathKind, DefinePath),
     AddRecoveryPath,
+    AddSafetyNetPath,
     KeyModal(ImportKeyModal),
     ThresholdSequenceModal(ThresholdSequenceModal),
 }
@@ -146,10 +150,11 @@ pub enum ImportKeyModal {
     XPubEdited(String),
     NameEdited(String),
     ManuallyImportXpub,
-    UseToken,
     ConfirmXpub,
-    SelectKey(usize),
+    UseToken(TokenKind),
     TokenEdited(String),
+    ConfirmToken,
+    SelectKey(usize),
 }
 
 #[derive(Debug, Clone)]
