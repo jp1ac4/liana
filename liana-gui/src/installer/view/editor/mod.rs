@@ -260,15 +260,14 @@ pub fn edit_key_modal<'a>(
     keys: Vec<Element<'a, Message>>,
     error: Option<&Error>,
     chosen_signer: Option<Fingerprint>,
+    chosen_key_source_kind: Option<&KeySourceKind>,
     hot_signer_fingerprint: &Fingerprint,
     signer_alias: Option<&'a String>,
     form_name: &'a form::Value<String>,
     form_xpub: &form::Value<String>,
-    key_source_kind: Option<&KeySourceKind>,
+    form_token: &form::Value<String>,
     duplicate_master_fg: bool,
 ) -> Element<'a, Message> {
-    let manually_imported_xpub =
-        key_source_kind.is_some_and(|kind| matches!(kind, KeySourceKind::Manual));
     let content = Column::new()
         .padding(25)
         .push_maybe(error.map(|e| card::error("Failed to import xpub", e.to_string())))
@@ -301,7 +300,7 @@ pub fn edit_key_modal<'a>(
                             .on_press(Message::UseHotSigner)
                             .style(theme::button::secondary),
                         )
-                        .push(if manually_imported_xpub {
+                        .push(if chosen_key_source_kind == Some(&KeySourceKind::Manual) && chosen_signer.is_none() {
                                 card::simple(Column::new()
                                     .spacing(10)
                                     .push(
@@ -330,24 +329,75 @@ pub fn edit_key_modal<'a>(
                                             )
                                             .spacing(10)
                                     ))
-                                    } else {
+                                } else {
                                     Container::new(
-                                            Button::new(
-                                            Row::new()
-                                                .align_y(Alignment::Center)
-                                                .spacing(10)
-                                                .push(icon::import_icon())
-                                                .push(p1_regular("Enter an extended public key"))
-                                            )
-                                            .padding(20)
-                                            .width(Length::Fill)
-                                            .on_press(Message::DefineDescriptor(
-                                                    message::DefineDescriptor::KeyModal(message::ImportKeyModal::ManuallyImportXpub)
-                                            ))
-                                            .style(theme::button::secondary),
-                                    )
+                                        Button::new(
+                                        Row::new()
+                                            .align_y(Alignment::Center)
+                                            .spacing(10)
+                                            .push(icon::import_icon())
+                                            .push(p1_regular("Enter an extended public key"))
+                                        )
+                                        .padding(20)
+                                        .width(Length::Fill)
+                                        .on_press(Message::DefineDescriptor(
+                                                message::DefineDescriptor::KeyModal(message::ImportKeyModal::ManuallyImportXpub)
+                                        ))
+                                        .style(theme::button::secondary),
+                                )
                                 }
-                        )
+                            )
+                            .push(if chosen_key_source_kind == Some(&KeySourceKind::Token) && chosen_signer.is_none() {
+                                card::simple(Column::new()
+                                    .spacing(10)
+                                    .push(
+                                        Row::new()
+                                            .align_y(Alignment::Center)
+                                            .push(p1_regular("Enter a token:").width(Length::Fill))
+                                            .push(image::success_mark_icon().width(Length::Fixed(50.0)))
+                                    )
+                                    .push(
+                                        Row::new()
+                                            .push(
+                                                form::Form::new_trimmed(
+                                                    "MY_TOKEN_123",
+                                                    form_token, |msg| {
+                                                        Message::DefineDescriptor(
+                                                            message::DefineDescriptor::KeyModal(
+                                                                message::ImportKeyModal::TokenEdited(msg),),)
+                                                    })
+                                                    .warning("Please enter correct token")
+                                                    .size(text::P1_SIZE)
+                                                    .padding(10),
+                                            )
+                                            .push(
+                                                button::primary(None, "Confirm")
+                                                .on_press_maybe(
+                                                (!form_token.value.is_empty() && form_token.valid).then_some(Message::DefineDescriptor(
+                                        message::DefineDescriptor::KeyModal(
+                                            message::ImportKeyModal::ConfirmToken,
+                                        ),
+                                    ))
+                                            )
+                                    ).spacing(10)))
+                                } else {
+                                    Container::new(
+                                        Button::new(
+                                        Row::new()
+                                            .align_y(Alignment::Center)
+                                            .spacing(10)
+                                            .push(icon::import_icon())
+                                            .push(p1_regular("Enter a token"))
+                                        )
+                                        .padding(20)
+                                        .width(Length::Fill)
+                                        .on_press(Message::DefineDescriptor(
+                                                message::DefineDescriptor::KeyModal(message::ImportKeyModal::UseToken)
+                                        ))
+                                        .style(theme::button::secondary),
+                                )
+                                }
+                            )
                         .width(Length::Fill),
                 )
                 .push_maybe(
@@ -385,14 +435,16 @@ pub fn edit_key_modal<'a>(
                 .push(
                     button::primary(None, "Apply")
                         .on_press_maybe(if !duplicate_master_fg
-                            && (!manually_imported_xpub || form_xpub.valid)
-                            && !form_name.value.is_empty() && form_name.valid {
-                            Some(Message::DefineDescriptor(
-                                message::DefineDescriptor::KeyModal(
-                                    message::ImportKeyModal::ConfirmXpub,
-                                ),
-                            ))
-                        } else {None})
+                            && !form_name.value.is_empty() && form_name.valid
+                            && chosen_signer.is_some() {
+                                Some(Message::DefineDescriptor(
+                                    message::DefineDescriptor::KeyModal(
+                                        message::ImportKeyModal::ConfirmXpub,
+                                    )
+                                ))
+                            } else {
+                                None
+                            })
                         .width(Length::Fixed(200.0))
                 )
                 .align_x(Alignment::Center),
