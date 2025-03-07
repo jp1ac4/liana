@@ -24,7 +24,7 @@ use liana_ui::{
 };
 
 use crate::installer::{
-    descriptor::{KeySourceKind, PathKind, PathSequence},
+    descriptor::{KeySourceKind, PathKind, PathSequence, PathWarning},
     message::{self, Message},
     prompt, services,
     view::defined_sequence,
@@ -91,7 +91,7 @@ pub fn path(
     color: iced::Color,
     title: Option<String>,
     sequence: PathSequence,
-    duplicate_sequence: bool,
+    warning: Option<PathWarning>,
     threshold: usize,
     keys: Vec<Element<message::DefinePath>>,
     fixed: bool,
@@ -101,7 +101,7 @@ pub fn path(
         Column::new()
             .spacing(10)
             .push_maybe(title.map(|t| Row::new().push(Space::with_width(10)).push(p1_bold(t))))
-            .push(defined_sequence(sequence, duplicate_sequence))
+            .push(defined_sequence(sequence, warning))
             .push(
                 Column::new()
                     .spacing(5)

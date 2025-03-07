@@ -18,7 +18,7 @@ use crate::{
     app::settings::ProviderKey,
     hw::{HardwareWallet, HardwareWallets},
     installer::{
-        descriptor::{KeySource, KeySourceKind, PathKind},
+        descriptor::{Key, KeySource, KeySourceKind, PathKind},
         message::{self, Message},
         view, Error,
     },
@@ -40,14 +40,6 @@ pub fn new_multixkey_from_xpub(
         .unwrap(),
         wildcard: Wildcard::Unhardened,
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct Key {
-    pub source: KeySource,
-    pub name: String,
-    pub fingerprint: Fingerprint,
-    pub key: DescriptorPublicKey,
 }
 
 pub fn check_key_network(key: &DescriptorPublicKey, network: Network) -> bool {
@@ -335,7 +327,7 @@ impl super::DescriptorEditModal for EditXpubModal {
                     // We have checked that the token has not already been fetched and saved.
                     let token = self.form_token.value.clone();
                     let network = self.network;
-                    let chosen_key_source_kind = self.chosen_key_source_kind.clone();
+                    let chosen_key_source_kind = self.chosen_key_source_kind;
                     let client = services::Client::new();
                     return Task::perform(
                         async move {

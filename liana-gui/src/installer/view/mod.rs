@@ -32,7 +32,7 @@ use crate::{
     app::settings,
     hw::{is_compatible_with_tapminiscript, HardwareWallet, UnsupportedReason},
     installer::{
-        descriptor::PathSequence,
+        descriptor::{PathSequence, PathWarning},
         message::{self, DefineBitcoind, DefineNode, Message},
         prompt,
         step::{DownloadState, InstallState},
@@ -1502,7 +1502,7 @@ pub fn defined_threshold<'a>(
 
 pub fn defined_sequence<'a>(
     sequence: PathSequence,
-    duplicate_sequence: bool,
+    warning: Option<PathWarning>,
 ) -> Element<'a, message::DefinePath> {
     let (n_years, n_months, n_days, n_hours, n_minutes) = duration_from_sequence(sequence.as_u16());
     let duration_row = Row::new()
@@ -1573,15 +1573,7 @@ pub fn defined_sequence<'a>(
                     .align_y(alignment::Vertical::Center),
                 ),
             })
-            .push_maybe(if duplicate_sequence {
-                Some(
-                    text("No two recovery options may become available at the very same date.")
-                        .small()
-                        .style(theme::text::error),
-                )
-            } else {
-                None
-            })
+            .push_maybe(warning.map(|w| text(w.message()).small().style(theme::text::error)))
             .spacing(15),
     )
     .padding(5)

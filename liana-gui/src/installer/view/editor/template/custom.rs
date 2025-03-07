@@ -11,9 +11,8 @@ use liana_ui::{
 };
 
 use crate::installer::{
-    descriptor::{PathKind, PathSequence},
+    descriptor::Path,
     message::{self, Message},
-    step::descriptor::editor::key::Key,
     view::{
         editor::{define_descriptor_advanced_settings, defined_key, path, undefined_key},
         layout,
@@ -48,20 +47,13 @@ pub fn custom_template_description(progress: (usize, usize)) -> Element<'static,
     )
 }
 
-pub struct Path<'a> {
-    pub keys: Vec<Option<&'a Key>>,
-    pub sequence: PathSequence,
-    pub duplicate_sequence: bool,
-    pub threshold: usize,
-}
-
 pub fn custom_template<'a>(
     progress: (usize, usize),
     use_taproot: bool,
-    primary_path: Path<'a>,
-    recovery_paths: &mut dyn Iterator<Item = Path<'a>>,
-    num_recovery_paths: usize,
-    safety_net_path: Option<Path<'a>>,
+    primary_path: &'a Path,
+    recovery_paths: &mut dyn Iterator<Item = (usize, &'a Path)>,
+    safety_net_path: Option<(usize, &'a Path)>,
+    num_non_primary_paths: usize,
     valid: bool,
 ) -> Element<'a, Message> {
     let prim_keys_fixed = primary_path.keys.len() < 2; // can only delete a primary key if there are 2 or more
@@ -100,7 +92,7 @@ pub fn custom_template<'a>(
                     color::GREEN,
                     Some("Primary spending option:".to_string()),
                     primary_path.sequence,
-                    primary_path.duplicate_sequence,
+                    primary_path.warning,
                     primary_path.threshold,
                     primary_path
                         .keys
@@ -132,23 +124,17 @@ pub fn custom_template<'a>(
                         .collect(),
                     false,
                 )
-                .map(|msg| {
-                    Message::DefineDescriptor(message::DefineDescriptor::Path(
-                        0,
-                        PathKind::Primary,
-                        msg,
-                    ))
-                }),
+                .map(|msg| Message::DefineDescriptor(message::DefineDescriptor::Path(0, msg))),
             )
             .push(recovery_paths.into_iter().enumerate().fold(
                 Column::new().spacing(20),
-                |col, (i, p)| {
+                |col, (i, (p_idx, p))| {
                     col.push(
                         path(
                             color::ORANGE,
                             Some(format!("Recovery option #{}:", i + 1)),
                             p.sequence,
-                            p.duplicate_sequence,
+                            p.warning,
                             p.threshold,
                             p.keys
                                 .iter()
@@ -157,9 +143,7 @@ pub fn custom_template<'a>(
                                     // We cannot delete a key if doing so would remove all recovery paths,
                                     // i.e. if there is only 1 recovery path and it contains only 1 key,
                                     // and there is no safety net path.
-                                    let fixed = num_recovery_paths < 2
-                                        && p.keys.len() < 2
-                                        && safety_net_path.is_none();
+                                    let fixed = num_non_primary_paths < 2 && p.keys.len() < 2;
                                     if let Some(key) = recovery_key {
                                         defined_key(
                                             &key.name,
@@ -187,8 +171,7 @@ pub fn custom_template<'a>(
                         )
                         .map(move |msg| {
                             Message::DefineDescriptor(message::DefineDescriptor::Path(
-                                i + 1,
-                                p.sequence.path_kind(),
+                                p_idx + 1, // add one to index to account for primary path.
                                 msg,
                             ))
                         }),
@@ -214,12 +197,12 @@ pub fn custom_template<'a>(
                         ),
                     ),
             )
-            .push_maybe(safety_net_path.as_ref().map(move |sn_path| {
+            .push_maybe(safety_net_path.map(|(sn_index, sn_path)| {
                 path(
                     color::WHITE,
                     Some("Safety Net:".to_string()),
                     sn_path.sequence,
-                    sn_path.duplicate_sequence,
+                    sn_path.warning,
                     sn_path.threshold,
                     sn_path
                         .keys
@@ -228,7 +211,7 @@ pub fn custom_template<'a>(
                         .map(|(i, sn_key)| {
                             // Cannot delete safety net key if doing so would remove the safety net path
                             // and there are no other recovery paths.
-                            let fixed = num_recovery_paths == 0 && sn_path.keys.len() < 2;
+                            let fixed = num_non_primary_paths < 2 && sn_path.keys.len() < 2;
                             if let Some(key) = sn_key {
                                 defined_key(
                                     &key.name,
@@ -255,11 +238,8 @@ pub fn custom_template<'a>(
                     false,
                 )
                 .map(move |msg| {
-                    Message::DefineDescriptor(message::DefineDescriptor::Path(
-                        1 + num_recovery_paths,
-                        PathKind::SafetyNet,
-                        msg,
-                    ))
+                    // Add 1 to index to account for primary path.
+                    Message::DefineDescriptor(message::DefineDescriptor::Path(sn_index + 1, msg))
                 })
             }))
             .push(

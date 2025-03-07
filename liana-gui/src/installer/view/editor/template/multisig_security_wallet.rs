@@ -12,9 +12,8 @@ use liana_ui::{
 
 use crate::installer::{
     context,
-    descriptor::{PathKind, PathSequence},
+    descriptor::{Path, PathKind, PathSequence},
     message::{self, Message},
-    step::descriptor::editor::key::Key,
     view::{
         editor::{
             define_descriptor_advanced_settings, defined_key, path, undefined_key,
@@ -78,10 +77,8 @@ pub fn multisig_security_template_description(
 pub fn multisig_security_template<'a>(
     progress: (usize, usize),
     use_taproot: bool,
-    primary_keys: Vec<Option<&'a Key>>,
-    recovery_keys: Vec<Option<&'a Key>>,
-    sequence: PathSequence,
-    threshold: usize,
+    primary_path: &'a Path,
+    recovery_path: &'a Path,
     valid: bool,
 ) -> Element<'a, Message> {
     layout(
@@ -119,9 +116,10 @@ pub fn multisig_security_template<'a>(
                     color::GREEN,
                     None,
                     PathSequence::Primary,
-                    false,
-                    primary_keys.len(),
-                    primary_keys
+                    primary_path.warning,
+                    primary_path.keys.len(),
+                    primary_path
+                        .keys
                         .iter()
                         .enumerate()
                         .map(|(i, primary_key)| {
@@ -141,7 +139,7 @@ pub fn multisig_security_template<'a>(
                                 undefined_key(
                                     color::GREEN,
                                     format!("Primary key #{}", i + 1),
-                                    !primary_keys[0..i].iter().any(|k| k.is_none()),
+                                    !primary_path.keys[0..i].iter().any(|k| k.is_none()),
                                     true,
                                 )
                             }
@@ -157,11 +155,7 @@ pub fn multisig_security_template<'a>(
                             vec![(0, i), (1, i)],
                         ))
                     } else {
-                        Message::DefineDescriptor(message::DefineDescriptor::Path(
-                            0,
-                            PathKind::Primary,
-                            msg,
-                        ))
+                        Message::DefineDescriptor(message::DefineDescriptor::Path(0, msg))
                     }
                 }),
             )
@@ -169,10 +163,11 @@ pub fn multisig_security_template<'a>(
                 path(
                     color::ORANGE,
                     None,
-                    sequence,
-                    false,
-                    threshold,
-                    recovery_keys
+                    recovery_path.sequence,
+                    recovery_path.warning,
+                    recovery_path.threshold,
+                    recovery_path
+                        .keys
                         .iter()
                         .enumerate()
                         .map(|(j, recovery_key)| {
@@ -209,8 +204,8 @@ pub fn multisig_security_template<'a>(
                                     } else {
                                         "Recovery key".to_string()
                                     },
-                                    !(primary_keys.iter().any(|k| k.is_none())
-                                        || recovery_keys[0..j].iter().any(|k| k.is_none())),
+                                    !(primary_path.keys.iter().any(|k| k.is_none())
+                                        || recovery_path.keys[0..j].iter().any(|k| k.is_none())),
                                     true,
                                 )
                             }
@@ -231,11 +226,7 @@ pub fn multisig_security_template<'a>(
                             path_kind, keys,
                         ))
                     } else {
-                        Message::DefineDescriptor(message::DefineDescriptor::Path(
-                            1,
-                            PathKind::Recovery,
-                            msg,
-                        ))
+                        Message::DefineDescriptor(message::DefineDescriptor::Path(1, msg))
                     }
                 }),
             )

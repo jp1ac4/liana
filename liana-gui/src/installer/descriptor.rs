@@ -1,4 +1,5 @@
 use async_hwi::{DeviceKind, Version};
+use liana::miniscript::{bitcoin::bip32::Fingerprint, descriptor::DescriptorPublicKey};
 
 use crate::{
     app::settings::ProviderKey, hw::is_compatible_with_tapminiscript, services::api::KeyKind,
@@ -8,7 +9,7 @@ use crate::{
 const ENABLE_COSIGNER_KEYS: bool = true; // FIXME: Set to false after testing.
 
 /// The source of a descriptor public key.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeySource {
     /// A hardware signing device with the given kind and version.
     Device(DeviceKind, Option<Version>),
@@ -84,7 +85,7 @@ impl KeySource {
 }
 
 /// The kind of `KeySource`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum KeySourceKind {
     /// A hardware signing device.
     Device,
@@ -94,6 +95,74 @@ pub enum KeySourceKind {
     Manual,
     /// A token for a key with the given kind.
     Token(KeyKind),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Key {
+    pub source: KeySource,
+    pub name: String,
+    pub fingerprint: Fingerprint,
+    pub key: DescriptorPublicKey,
+}
+
+pub struct Path {
+    pub keys: Vec<Option<Key>>,
+    pub threshold: usize,
+    pub sequence: PathSequence,
+    pub warning: Option<PathWarning>,
+}
+
+impl Path {
+    pub fn new(kind: PathKind) -> Self {
+        let sequence = match kind {
+            PathKind::Primary => PathSequence::Primary,
+            PathKind::Recovery => PathSequence::Recovery(u16::MAX - 1), // reserve MAX for safety net path
+            PathKind::SafetyNet => PathSequence::SafetyNet,
+        };
+        Self {
+            keys: vec![None],
+            threshold: 1,
+            sequence,
+            warning: None,
+        }
+    }
+
+    pub fn new_primary_path() -> Self {
+        Self::new(PathKind::Primary)
+    }
+
+    pub fn new_recovery_path() -> Self {
+        Self::new(PathKind::Recovery)
+    }
+
+    pub fn new_safety_net_path() -> Self {
+        Self::new(PathKind::SafetyNet)
+    }
+
+    pub fn with_n_keys(mut self, n: usize) -> Self {
+        self.keys = Vec::new();
+        for _i in 0..n {
+            self.keys.push(None);
+        }
+        self
+    }
+
+    pub fn with_threshold(mut self, t: usize) -> Self {
+        self.threshold = if t > self.keys.len() {
+            self.keys.len()
+        } else {
+            t
+        };
+        self
+    }
+
+    pub fn kind(&self) -> PathKind {
+        self.sequence.path_kind()
+    }
+
+    pub fn valid(&self) -> bool {
+        !self.keys.is_empty() && !self.keys.iter().any(|k| k.is_none()) && self.warning.is_none()
+    }
 }
 
 /// The kind of spending path.
@@ -142,6 +211,28 @@ impl PathSequence {
             Self::Primary => PathKind::Primary,
             Self::Recovery(_) => PathKind::Recovery,
             Self::SafetyNet => PathKind::SafetyNet,
+        }
+    }
+}
+
+/// A path warning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathWarning {
+    DuplicateSequence,
+    OnlyCosignerKeys,
+    KeySourceKindDisallowed,
+}
+
+impl PathWarning {
+    pub fn message(&self) -> &'static str {
+        match self {
+            Self::DuplicateSequence => {
+                "No two recovery options may become available at the very same date."
+            }
+            Self::OnlyCosignerKeys => "A path cannot contain only cosigner keys.",
+            Self::KeySourceKindDisallowed => {
+                "Path contains a key that is disallowed for this kind of path."
+            }
         }
     }
 }

@@ -9,7 +9,7 @@ use crate::{
     app::settings::ProviderKey,
     download::{DownloadError, Progress},
     hw::HardwareWalletMessage,
-    installer::{descriptor::PathKind, step::descriptor::editor::key::Key},
+    installer::descriptor::{Key, PathKind},
     lianalite::client::{auth::AuthClient, backend::api},
     node::{
         bitcoind::{Bitcoind, ConfigField, RpcAuthType},
@@ -120,7 +120,7 @@ pub enum DefineDescriptor {
     ImportDescriptor(String),
     KeysEdited(Vec<(usize, usize)>, Key),
     KeysEdit(PathKind, Vec<(usize, usize)>),
-    Path(usize, PathKind, DefinePath),
+    Path(usize, DefinePath),
     AddRecoveryPath,
     AddSafetyNetPath,
     KeyModal(ImportKeyModal),

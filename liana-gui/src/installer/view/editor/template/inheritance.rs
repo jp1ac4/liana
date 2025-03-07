@@ -12,9 +12,8 @@ use liana_ui::{
 
 use crate::installer::{
     context,
-    descriptor::{PathKind, PathSequence},
+    descriptor::{Path, PathSequence},
     message::{self, Message},
-    step::descriptor::editor::key::Key,
     view::{
         editor::{define_descriptor_advanced_settings, defined_key, path, undefined_key},
         layout,
@@ -68,11 +67,15 @@ After a period of inactivity (but not before that) your Inheritance Key will bec
 pub fn inheritance_template<'a>(
     progress: (usize, usize),
     use_taproot: bool,
-    primary_key: Option<&'a Key>,
-    recovery_key: Option<&'a Key>,
-    sequence: u16,
+    primary_path: &'a Path,
+    recovery_path: &'a Path,
     valid: bool,
 ) -> Element<'a, Message> {
+    let primary_key = if let Some(first) = primary_path.keys.first() {
+        first.as_ref()
+    } else {
+        None
+    };
     layout(
         progress,
         None,
@@ -108,7 +111,7 @@ pub fn inheritance_template<'a>(
                     color::GREEN,
                     None,
                     PathSequence::Primary,
-                    false,
+                    primary_path.warning,
                     1,
                     vec![if let Some(key) = primary_key {
                         defined_key(
@@ -128,22 +131,16 @@ pub fn inheritance_template<'a>(
                     .map(|msg| message::DefinePath::Key(0, msg))],
                     true,
                 )
-                .map(|msg| {
-                    Message::DefineDescriptor(message::DefineDescriptor::Path(
-                        0,
-                        PathKind::Primary,
-                        msg,
-                    ))
-                }),
+                .map(|msg| Message::DefineDescriptor(message::DefineDescriptor::Path(0, msg))),
             )
             .push(
                 path(
                     color::WHITE,
                     None,
-                    PathSequence::Recovery(sequence),
-                    false,
+                    recovery_path.sequence,
+                    recovery_path.warning,
                     1,
-                    vec![if let Some(key) = recovery_key {
+                    vec![if let Some(Some(key)) = recovery_path.keys.first() {
                         defined_key(
                             &key.name,
                             color::WHITE,
@@ -161,13 +158,7 @@ pub fn inheritance_template<'a>(
                     .map(|msg| message::DefinePath::Key(0, msg))],
                     true,
                 )
-                .map(|msg| {
-                    Message::DefineDescriptor(message::DefineDescriptor::Path(
-                        1,
-                        PathKind::Recovery,
-                        msg,
-                    ))
-                }),
+                .map(|msg| Message::DefineDescriptor(message::DefineDescriptor::Path(1, msg))),
             )
             .push(
                 Row::new()
