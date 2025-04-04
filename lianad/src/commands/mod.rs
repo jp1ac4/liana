@@ -68,6 +68,8 @@ pub enum CommandError {
     /// An error that might occur in the racy rescan triggering logic.
     RescanTrigger(String),
     RecoveryNotAvailable,
+    // Include timelock in error as it may not have been set explicitly by the user.
+    OutpointNotRecoverable(bitcoin::OutPoint, /* timelock */ u16),
     /// Overflowing or unhardened derivation index.
     InvalidDerivationIndex,
     RbfError(RbfErrorInfo),
@@ -119,6 +121,11 @@ impl fmt::Display for CommandError {
             Self::RecoveryNotAvailable => write!(
                 f,
                 "No coin currently spendable through this timelocked recovery path."
+            ),
+            Self::OutpointNotRecoverable(op, t) => write!(
+                f,
+                "Coin at '{}' is not recoverable with timelock '{}'",
+                op, t
             ),
             Self::InvalidDerivationIndex => {
                 write!(f, "Unhardened or overflowing BIP32 derivation index.")
@@ -1141,11 +1148,16 @@ impl DaemonControl {
         ListTransactionsResult { transactions }
     }
 
-    /// Create a transaction that sweeps all coins for which a timelocked recovery path is
-    /// currently available to a provided address with the provided feerate.
+    /// Create a transaction that sweeps coins using a timelocked recovery path to a
+    /// provided address with the provided feerate.
     ///
     /// The `timelock` parameter can be used to specify which recovery path to use. By default,
     /// we'll use the first recovery path available.
+    ///
+    /// If `coins_outpoints` is empty, all coins for which the given recovery path is currently
+    /// available will be used. Otherwise, only those specified will be considered. An error will
+    /// be returned if any coins specified by `coins_outpoints` are unknown, already spent or
+    /// otherwise not currently recoverable using the given recovery path.
     ///
     /// Note that not all coins may be spendable through a single recovery path at the same time.
     pub fn create_recovery(
@@ -1153,6 +1165,7 @@ impl DaemonControl {
         address: bitcoin::Address<address::NetworkUnchecked>,
         feerate_vb: u64,
         timelock: Option<u16>,
+        coins_outpoints: &[bitcoin::OutPoint],
     ) -> Result<CreateRecoveryResult, CommandError> {
         if feerate_vb < 1 {
             return Err(CommandError::InvalidFeerate(feerate_vb));
@@ -1167,26 +1180,42 @@ impl DaemonControl {
         let timelock =
             timelock.unwrap_or_else(|| self.config.main_descriptor.first_timelock_value());
         let height_delta: i32 = timelock.into();
-        let sweepable_coins: Vec<_> = db_conn
-            .coins(&[CoinStatus::Confirmed], &[])
-            .into_values()
-            .filter_map(|c| {
-                // We are interested in coins available at the *next* block
-                if c.block_info
-                    .map(|b| current_height + 1 >= b.height + height_delta)
-                    .unwrap_or(false)
-                {
-                    Some(coin_to_candidate(
-                        &c,
-                        /*must_select=*/ true,
-                        /*sequence=*/ Some(bitcoin::Sequence::from_height(timelock)),
-                        /*ancestor_info=*/ None,
-                    ))
-                } else {
-                    None
+        let coins = if coins_outpoints.is_empty() {
+            db_conn.coins(&[CoinStatus::Confirmed], &[])
+        } else {
+            // We could have used the same DB call for both cases by specifying the status and outpoints,
+            // but in order to give more helpful errors, we filter the DB call here only for outpoints
+            // and then check for coin status separately.
+            let coins_by_op = db_conn.coins(&[], coins_outpoints);
+            for op in coins_outpoints {
+                let coin = coins_by_op
+                    .get(op)
+                    .ok_or(CommandError::UnknownOutpoint(*op))?;
+                // We only check for spent coins here. Unconfirmed coins (including immature)
+                // will fail the check for recoverability further below.
+                if coin.is_spent() {
+                    return Err(CommandError::AlreadySpent(*op));
                 }
-            })
-            .collect();
+            }
+            coins_by_op
+        };
+        let mut sweepable_coins = Vec::with_capacity(coins.len());
+        for (op, c) in coins {
+            // We are interested in coins available at the *next* block
+            if c.block_info
+                .map(|b| current_height + 1 >= b.height + height_delta)
+                .unwrap_or(false)
+            {
+                sweepable_coins.push(coin_to_candidate(
+                    &c,
+                    /*must_select=*/ true,
+                    /*sequence=*/ Some(bitcoin::Sequence::from_height(timelock)),
+                    /*ancestor_info=*/ None,
+                ));
+            } else if !coins_outpoints.is_empty() {
+                return Err(CommandError::OutpointNotRecoverable(op, timelock));
+            }
+        }
         if sweepable_coins.is_empty() {
             return Err(CommandError::RecoveryNotAvailable);
         }
