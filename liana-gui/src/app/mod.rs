@@ -30,8 +30,7 @@ pub use config::Config;
 pub use message::Message;
 
 use state::{
-    CoinsPanel, CreateSpendPanel, Home, PsbtsPanel, ReceivePanel, RecoveryPanel, State,
-    TransactionsPanel,
+    CoinsPanel, CreateSpendPanel, Home, PsbtsPanel, ReceivePanel, State, TransactionsPanel,
 };
 use wallet::{sync_status, SyncStatus};
 
@@ -49,7 +48,7 @@ struct Panels {
     coins: CoinsPanel,
     transactions: TransactionsPanel,
     psbts: PsbtsPanel,
-    recovery: RecoveryPanel,
+    recovery: CreateSpendPanel,
     receive: ReceivePanel,
     create_spend: CreateSpendPanel,
     settings: SettingsState,
@@ -90,7 +89,12 @@ impl Panels {
             coins: CoinsPanel::new(&cache.coins, wallet.main_descriptor.first_timelock_value()),
             transactions: TransactionsPanel::new(wallet.clone()),
             psbts: PsbtsPanel::new(wallet.clone()),
-            recovery: RecoveryPanel::new(wallet.clone(), &cache.coins, cache.blockheight),
+            recovery: CreateSpendPanel::new_recovery(
+                wallet.clone(),
+                &cache.coins,
+                cache.blockheight as u32,
+                cache.network,
+            ),
             receive: ReceivePanel::new(data_dir.clone(), wallet.clone()),
             create_spend: CreateSpendPanel::new(
                 wallet.clone(),
@@ -237,8 +241,18 @@ impl App {
             }
             menu::Menu::CreateSpendTx => {
                 // redo the process of spending only if user want to start a new one.
-                if !self.panels.create_spend.is_first_step() {
+                if !self.panels.create_spend.keep_state() {
                     self.panels.create_spend = CreateSpendPanel::new(
+                        self.wallet.clone(),
+                        &self.cache.coins,
+                        self.cache.blockheight as u32,
+                        self.cache.network,
+                    );
+                }
+            }
+            menu::Menu::Receive => {
+                if !self.panels.recovery.keep_state() {
+                    self.panels.recovery = CreateSpendPanel::new_recovery(
                         self.wallet.clone(),
                         &self.cache.coins,
                         self.cache.blockheight as u32,

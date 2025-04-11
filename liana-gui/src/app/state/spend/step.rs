@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
+    convert::TryInto,
     iter::FromIterator,
     str::FromStr,
     sync::Arc,
@@ -60,9 +61,10 @@ pub trait Step {
         cache: &Cache,
         message: Message,
     ) -> Task<Message>;
-    fn apply(&self, _draft: &mut TransactionDraft) {}
+    fn apply(&self, _draft: &mut TransactionDraft, _recovery_timelock: &mut Option<u16>) {}
     fn interrupt(&mut self) {}
-    fn load(&mut self, _draft: &TransactionDraft) {}
+    fn load(&mut self, _cache: &Cache, _draft: &TransactionDraft, _recovery_timelock: Option<u16>) {
+    }
     fn subscription(&self) -> Subscription<Message> {
         Subscription::none()
     }
@@ -82,7 +84,9 @@ pub struct DefineSpend {
     network: Network,
     descriptor: LianaDescriptor,
     curve: secp256k1::Secp256k1<secp256k1::VerifyOnly>,
-    timelock: u16,
+    /// The timelock corresponding to the recovery path to use for the spend
+    /// if not `None`. Otherwise, the primary path will be used.
+    recovery_timelock: Option<u16>,
     coins: Vec<(Coin, bool)>,
     coins_labels: HashMap<String, String>,
     batch_label: form::Value<String>,
@@ -90,6 +94,53 @@ pub struct DefineSpend {
     feerate: form::Value<String>,
     generated: Option<(Psbt, Vec<String>)>,
     warning: Option<Error>,
+    /// Whether this is the first step of the spend creation.
+    is_first_step: bool,
+}
+
+/// Filter the coins that should be available for selection.
+///
+/// `selected` will be `None` if the coins are being filtered for the first time.
+/// In that case, all suitable coins will be selected for a recovery spend,
+/// while for a primary path spend, no coins will be selected.
+fn filter_coins(
+    coins: &[Coin],
+    recovery_timelock: Option<u16>,
+    blockheight: i32,
+    selected: Option<HashSet<OutPoint>>,
+) -> Vec<(Coin, bool)> {
+    coins
+        .iter()
+        .filter_map(|c| {
+            if c.spend_info.is_none() && !c.is_immature {
+                if let Some(recovery_timelock) = recovery_timelock {
+                    c.block_height
+                        .filter(|bh| {
+                            blockheight + 1 >= bh + <u16 as Into<i32>>::into(recovery_timelock)
+                        })
+                        .map(|_| {
+                            (
+                                c.clone(),
+                                selected
+                                    .as_ref()
+                                    .map(|sel| sel.contains(&c.outpoint))
+                                    .unwrap_or(true),
+                            )
+                        })
+                } else {
+                    Some((
+                        c.clone(),
+                        selected
+                            .as_ref()
+                            .map(|sel| sel.contains(&c.outpoint))
+                            .unwrap_or(false),
+                    ))
+                }
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 impl DefineSpend {
@@ -97,36 +148,36 @@ impl DefineSpend {
         network: Network,
         descriptor: LianaDescriptor,
         coins: &[Coin],
-        timelock: u16,
+        blockheight: u32,
+        recovery_timelock: Option<u16>,
+        is_first_step: bool,
     ) -> Self {
-        let coins: Vec<(Coin, bool)> = coins
-            .iter()
-            .filter_map(|c| {
-                if c.spend_info.is_none() && !c.is_immature {
-                    Some((c.clone(), false))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
+        let coins = filter_coins(
+            coins,
+            recovery_timelock,
+            blockheight.try_into().expect("i32 by consensus"),
+            None,
+        );
         Self {
             network,
             descriptor,
             curve: secp256k1::Secp256k1::verification_only(),
-            timelock,
+            recovery_timelock,
             generated: None,
             coins,
             coins_labels: HashMap::new(),
             batch_label: form::Value::default(),
-            recipients: vec![Recipient::default()],
-            send_max_to_recipient: None,
-            is_user_coin_selection: false, // Start with auto-selection until user edits selection.
+            recipients: vec![Recipient::new(recovery_timelock.is_some())],
+            send_max_to_recipient: recovery_timelock.map(|_| 0), // for recovery, send max to recipient
+            // For primary path spend, start with auto-selection until user edits selection.
+            // For recovery, only use user selection.
+            is_user_coin_selection: recovery_timelock.is_some(),
             is_valid: false,
             is_duplicate: false,
             feerate: form::Value::default(),
             amount_left_to_select: None,
             warning: None,
+            is_first_step,
         }
     }
 
@@ -143,7 +194,7 @@ impl DefineSpend {
     }
 
     fn sort_coins(&mut self, blockheight: u32) {
-        let timelock = self.timelock;
+        let timelock = self.timelock();
         self.coins.sort_by(|(a, a_selected), (b, b_selected)| {
             if *a_selected && !b_selected || !a_selected && *b_selected {
                 b_selected.cmp(a_selected)
@@ -162,6 +213,15 @@ impl DefineSpend {
     pub fn self_send(mut self) -> Self {
         self.recipients = Vec::new();
         self
+    }
+
+    /// This is used for calculating a coin's remaining sequence.
+    ///
+    /// Use the first timelock if this is a primary path spend and otherwise the same
+    /// timelock as used for the recovery.
+    pub fn timelock(&self) -> u16 {
+        self.recovery_timelock
+            .unwrap_or_else(|| self.descriptor.first_timelock_value())
     }
 
     // If `is_redraft`, the validation of recipients will take into account
@@ -311,15 +371,31 @@ impl DefineSpend {
         };
 
         let feerate_vb = self.feerate.value.parse::<u64>().expect("Checked before");
+        let recovery_timelock = self.recovery_timelock;
         match tokio::runtime::Handle::current().block_on(async {
-            daemon
-                .create_spend_tx(
-                    &outpoints,
-                    &destinations,
-                    feerate_vb,
-                    Some(change_address.clone()),
-                )
-                .await
+            if let Some(reco_tl) = recovery_timelock {
+                daemon
+                    .create_recovery(
+                        change_address.clone(),
+                        &outpoints,
+                        feerate_vb,
+                        Some(reco_tl),
+                    )
+                    .await
+                    .map(|psbt| CreateSpendResult::Success {
+                        psbt,
+                        warnings: vec![],
+                    })
+            } else {
+                daemon
+                    .create_spend_tx(
+                        &outpoints,
+                        &destinations,
+                        feerate_vb,
+                        Some(change_address.clone()),
+                    )
+                    .await
+            }
         }) {
             Ok(CreateSpendResult::Success { psbt, .. }) => {
                 self.warning = None;
@@ -394,6 +470,25 @@ impl DefineSpend {
 }
 
 impl Step for DefineSpend {
+    fn load(&mut self, cache: &Cache, _draft: &TransactionDraft, recovery_timelock: Option<u16>) {
+        match (self.recovery_timelock, recovery_timelock) {
+            // If timelock has changed:
+            (Some(old_tl), Some(new_tl)) if old_tl != new_tl => {
+                self.recovery_timelock = Some(new_tl);
+                self.coins = filter_coins(
+                    &cache.coins,
+                    self.recovery_timelock,
+                    cache.blockheight,
+                    None,
+                );
+            }
+            _ => {
+                // We don't handle the case of a recovery timelock being added or removed:
+                // A spend is either primary or recovery and cannot change from one to the other.
+            }
+        }
+    }
+
     fn update(
         &mut self,
         daemon: Arc<dyn Daemon + Sync + Send>,
@@ -416,7 +511,9 @@ impl Step for DefineSpend {
                                 .map(|(c, _)| c.clone())
                                 .collect::<Vec<ListCoinsEntry>>()
                                 .as_slice(),
-                            self.timelock,
+                            cache.blockheight as u32,
+                            self.recovery_timelock,
+                            self.is_first_step,
                         );
                         return Task::none();
                     }
@@ -479,35 +576,56 @@ impl Step for DefineSpend {
                             .collect();
                         let mut outputs: HashMap<Address<address::NetworkUnchecked>, u64> =
                             HashMap::new();
-                        for recipient in &self.recipients {
-                            outputs.insert(
-                                Address::from_str(&recipient.address.value)
-                                    .expect("Checked before"),
-                                recipient.amount().expect("Checked before"),
-                            );
-                        }
                         let feerate_vb = self.feerate.value.parse::<u64>().unwrap_or(0);
                         self.warning = None;
-                        return Task::perform(
-                            async move {
-                                daemon
-                                    .create_spend_tx(&inputs, &outputs, feerate_vb, None)
-                                    .await
-                                    .map_err(|e| e.into())
-                                    .and_then(|res| match res {
-                                        CreateSpendResult::Success { psbt, warnings } => {
-                                            Ok((psbt, warnings))
-                                        }
-                                        CreateSpendResult::InsufficientFunds { missing } => {
-                                            Err(SpendCreationError::CoinSelection(
-                                                liana::spend::InsufficientFunds { missing },
-                                            )
-                                            .into())
-                                        }
-                                    })
-                            },
-                            Message::Psbt,
-                        );
+                        if let Some(reco_tl) = self.recovery_timelock {
+                            let sweep_address = Address::from_str(
+                                &self.recipients.first().expect("").address.value,
+                            )
+                            .expect("Checked before");
+                            return Task::perform(
+                                async move {
+                                    daemon
+                                        .create_recovery(
+                                            sweep_address,
+                                            &inputs,
+                                            feerate_vb,
+                                            Some(reco_tl),
+                                        )
+                                        .await
+                                        .map_err(|e| e.into())
+                                        .map(|psbt| (psbt, vec![]))
+                                },
+                                Message::Psbt,
+                            );
+                        } else {
+                            for recipient in &self.recipients {
+                                let address = Address::from_str(&recipient.address.value)
+                                    .expect("Checked before");
+                                outputs
+                                    .insert(address, recipient.amount().expect("Checked before"));
+                            }
+                            return Task::perform(
+                                async move {
+                                    daemon
+                                        .create_spend_tx(&inputs, &outputs, feerate_vb, None)
+                                        .await
+                                        .map_err(|e| e.into())
+                                        .and_then(|res| match res {
+                                            CreateSpendResult::Success { psbt, warnings } => {
+                                                Ok((psbt, warnings))
+                                            }
+                                            CreateSpendResult::InsufficientFunds { missing } => {
+                                                Err(SpendCreationError::CoinSelection(
+                                                    liana::spend::InsufficientFunds { missing },
+                                                )
+                                                .into())
+                                            }
+                                        })
+                                },
+                                Message::Psbt,
+                            );
+                        }
                     }
                     view::CreateSpendMessage::SelectCoin(i) => {
                         if let Some(coin) = self.coins.get_mut(i) {
@@ -560,17 +678,12 @@ impl Step for DefineSpend {
                                 None
                             }
                         }));
-                    self.coins = coins
-                        .into_iter()
-                        .filter_map(|coin| {
-                            if coin.spend_info.is_none() && !coin.is_immature {
-                                let selected = selected.contains(&coin.outpoint);
-                                Some((coin, selected))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
+                    self.coins = filter_coins(
+                        &coins,
+                        self.recovery_timelock,
+                        cache.blockheight,
+                        Some(selected),
+                    );
                     self.sort_coins(cache.blockheight as u32);
                     // In case some selected coins are not spendable anymore and
                     // new coins make more sense to be selected. A redraft is triggered
@@ -585,7 +698,7 @@ impl Step for DefineSpend {
         Task::none()
     }
 
-    fn apply(&self, draft: &mut TransactionDraft) {
+    fn apply(&self, draft: &mut TransactionDraft, _recovery_timelock: &mut Option<u16>) {
         draft.inputs = self
             .coins
             .iter()
@@ -640,13 +753,15 @@ impl Step for DefineSpend {
                 .collect(),
             self.is_valid,
             self.is_duplicate,
-            self.timelock,
+            self.timelock(),
+            self.recovery_timelock,
             &self.coins,
             &self.coins_labels,
             &self.batch_label,
             self.amount_left_to_select.as_ref(),
             &self.feerate,
             self.warning.as_ref(),
+            self.is_first_step,
         )
     }
 }
@@ -656,9 +771,17 @@ struct Recipient {
     label: form::Value<String>,
     address: form::Value<String>,
     amount: form::Value<String>,
+    is_recovery: bool,
 }
 
 impl Recipient {
+    fn new(is_recovery: bool) -> Self {
+        Self {
+            is_recovery,
+            ..Default::default()
+        }
+    }
+
     fn amount(&self) -> Result<u64, Error> {
         if self.amount.value.is_empty() {
             return Err(Error::Unexpected("Amount should be non-zero".to_string()));
@@ -731,7 +854,14 @@ impl Recipient {
     }
 
     fn view(&self, i: usize, is_max_selected: bool) -> Element<view::CreateSpendMessage> {
-        view::spend::recipient_view(i, &self.address, &self.amount, &self.label, is_max_selected)
+        view::spend::recipient_view(
+            i,
+            &self.address,
+            &self.amount,
+            &self.label,
+            is_max_selected,
+            self.is_recovery,
+        )
     }
 }
 
@@ -752,7 +882,7 @@ impl SaveSpend {
 }
 
 impl Step for SaveSpend {
-    fn load(&mut self, draft: &TransactionDraft) {
+    fn load(&mut self, _cache: &Cache, draft: &TransactionDraft, _recovery_timelock: Option<u16>) {
         let (psbt, warnings) = draft.generated.clone().unwrap();
         let mut tx = SpendTx::new(
             None,
@@ -831,4 +961,129 @@ impl Step for SaveSpend {
             content
         }
     }
+}
+
+use liana::miniscript::bitcoin::bip32::{DerivationPath, Fingerprint};
+
+pub struct SelectRecoveryPath {
+    wallet: Arc<Wallet>,
+    recovery_paths: Vec<RecoveryPath>,
+    selected_path: Option<usize>,
+    warning: Option<Error>,
+}
+
+impl SelectRecoveryPath {
+    pub fn new(wallet: Arc<Wallet>, coins: &[Coin], blockheight: i32) -> Self {
+        Self {
+            recovery_paths: recovery_paths(&wallet, coins, blockheight),
+            wallet,
+            selected_path: None,
+            warning: None,
+        }
+    }
+}
+
+impl Step for SelectRecoveryPath {
+    fn view<'a>(&'a self, cache: &'a Cache) -> Element<'a, view::Message> {
+        view::recovery::recovery(
+            cache,
+            self.recovery_paths
+                .iter()
+                .enumerate()
+                .filter_map(|(i, path)| {
+                    if path.number_of_coins > 0 {
+                        Some(view::recovery::recovery_path_view(
+                            i,
+                            path.threshold,
+                            &path.origins,
+                            path.total_amount,
+                            path.number_of_coins,
+                            &self.wallet.keys_aliases,
+                            self.selected_path == Some(i),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            self.selected_path,
+            self.warning.as_ref(),
+        )
+    }
+
+    fn update(
+        &mut self,
+        _daemon: Arc<dyn Daemon + Sync + Send>,
+        cache: &Cache,
+        message: Message,
+    ) -> Task<Message> {
+        match message {
+            Message::Coins(res) => match res {
+                Err(e) => self.warning = Some(e),
+                Ok(coins) => {
+                    self.warning = None;
+                    self.recovery_paths = recovery_paths(&self.wallet, &coins, cache.blockheight);
+                }
+            },
+            Message::View(view::Message::CreateSpend(view::CreateSpendMessage::SelectPath(
+                index,
+            ))) => {
+                if Some(index) == self.selected_path {
+                    self.selected_path = None;
+                } else {
+                    self.selected_path = Some(index);
+                }
+            }
+            _ => {}
+        };
+        Task::none()
+    }
+
+    fn apply(&self, _draft: &mut TransactionDraft, recovery_timelock: &mut Option<u16>) {
+        if let Some(selected_path) = self.selected_path {
+            if let Some(path) = self.recovery_paths.get(selected_path) {
+                *recovery_timelock = Some(path.sequence);
+            }
+        }
+    }
+}
+
+pub struct RecoveryPath {
+    threshold: usize,
+    sequence: u16,
+    origins: Vec<(Fingerprint, HashSet<DerivationPath>)>,
+    total_amount: Amount,
+    number_of_coins: usize,
+}
+
+fn recovery_paths(wallet: &Wallet, coins: &[Coin], blockheight: i32) -> Vec<RecoveryPath> {
+    wallet
+        .main_descriptor
+        .policy()
+        .recovery_paths()
+        .iter()
+        .map(|(&sequence, path)| {
+            let (number_of_coins, total_amount) = coins
+                .iter()
+                .filter(|coin| {
+                    coin.spend_info.is_none()
+                        && remaining_sequence(coin, blockheight as u32, sequence) <= 1
+                })
+                .fold(
+                    (0, Amount::from_sat(0)),
+                    |(number_of_coins, total_amount), coin| {
+                        (number_of_coins + 1, total_amount + coin.amount)
+                    },
+                );
+
+            let (threshold, origins) = path.thresh_origins();
+            RecoveryPath {
+                total_amount,
+                number_of_coins,
+                sequence,
+                threshold,
+                origins: origins.into_iter().collect(),
+            }
+        })
+        .collect()
 }
