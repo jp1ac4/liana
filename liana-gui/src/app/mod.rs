@@ -379,10 +379,17 @@ impl App {
             }
             Message::View(view::Message::Menu(menu)) => self.set_current_panel(menu),
             Message::View(view::Message::Clipboard(text)) => clipboard::write(text),
-            _ => self
-                .panels
-                .current_mut()
-                .update(self.daemon.clone(), &self.cache, message),
+            _ => {
+                // Take the opportunity to update the cached coins here.
+                // This is especially important for the remote backend, for which the cache
+                // is not updated very often.
+                if let Message::Coins(Ok(coins)) = &message {
+                    self.cache.coins = coins.clone();
+                }
+                self.panels
+                    .current_mut()
+                    .update(self.daemon.clone(), &self.cache, message)
+            }
         }
     }
 
