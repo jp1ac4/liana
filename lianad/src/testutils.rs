@@ -291,6 +291,25 @@ impl DatabaseConnection for DummyDatabase {
             .collect()
     }
 
+    fn coins_by_index_range(
+        &mut self,
+        start: bip32::ChildNumber,
+        end: bip32::ChildNumber,
+        is_change: bool,
+    ) -> HashMap<bitcoin::OutPoint, Coin> {
+        self.db
+            .read()
+            .unwrap()
+            .coins
+            .clone()
+            .into_iter()
+            .filter_map(|(op, c)| {
+                ((start..=end).contains(&c.derivation_index) && c.is_change == is_change)
+                    .then_some((op, c))
+            })
+            .collect()
+    }
+
     fn list_spending_coins(&mut self) -> HashMap<bitcoin::OutPoint, Coin> {
         let mut result = HashMap::new();
         for (k, v) in self.db.read().unwrap().coins.iter() {

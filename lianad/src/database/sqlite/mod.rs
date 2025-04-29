@@ -448,6 +448,24 @@ impl SqliteConn {
         .expect("Db must not fail")
     }
 
+    /// TODO.
+    pub fn db_coins_by_index_range(
+        &mut self,
+        start: bip32::ChildNumber,
+        end: bip32::ChildNumber,
+        is_change: bool,
+    ) -> Result<Vec<DbCoin>, SqliteDbError> {
+        let start_u32: u32 = start.into();
+        let end_u32: u32 = end.into();
+        db_query(
+            &mut self.conn,
+            "SELECT * FROM coins WHERE derivation_index BETWEEN ?1 AND ?2 AND is_change IS ?3",
+            rusqlite::params![start_u32, end_u32, is_change],
+            |row| row.try_into(),
+        )
+        .map_err(SqliteDbError::Rusqlite)
+    }
+
     /// List coins that are being spent and whose spending transaction is still unconfirmed.
     pub fn list_spending_coins(&mut self) -> Vec<DbCoin> {
         self.coins(&[CoinStatus::Spending], &[])

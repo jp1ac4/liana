@@ -153,6 +153,14 @@ pub trait DatabaseConnection {
         outpoints: &[bitcoin::OutPoint],
     ) -> HashMap<bitcoin::OutPoint, Coin>;
 
+    /// TODO:
+    fn coins_by_index_range(
+        &mut self,
+        start: bip32::ChildNumber,
+        end: bip32::ChildNumber,
+        is_change: bool,
+    ) -> HashMap<bitcoin::OutPoint, Coin>;
+
     fn spend_tx(&mut self, txid: &bitcoin::Txid) -> Option<Psbt>;
 
     /// Insert a new Spend transaction or replace an existing one.
@@ -282,6 +290,19 @@ impl DatabaseConnection for SqliteConn {
         outpoints: &[bitcoin::OutPoint],
     ) -> HashMap<bitcoin::OutPoint, Coin> {
         self.coins(statuses, outpoints)
+            .into_iter()
+            .map(|db_coin| (db_coin.outpoint, db_coin.into()))
+            .collect()
+    }
+
+    fn coins_by_index_range(
+        &mut self,
+        start: bip32::ChildNumber,
+        end: bip32::ChildNumber,
+        is_change: bool,
+    ) -> HashMap<bitcoin::OutPoint, Coin> {
+        self.db_coins_by_index_range(start, end, is_change)
+            .expect("database must be available")
             .into_iter()
             .map(|db_coin| (db_coin.outpoint, db_coin.into()))
             .collect()
