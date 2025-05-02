@@ -199,6 +199,50 @@ fn list_addresses(
     Ok(serde_json::json!(&res))
 }
 
+fn list_revealed_addresses(
+    control: &DaemonControl,
+    params: Params,
+) -> Result<serde_json::Value, Error> {
+    let is_change = params
+        .get(0, "is_change")
+        .ok_or_else(|| Error::invalid_params("Missing 'is_change' parameter."))?
+        .as_bool()
+        .ok_or_else(|| Error::invalid_params("Invalid 'is_change' parameter."))?;
+    let exclude_used = params
+        .get(1, "exclude_used")
+        .ok_or_else(|| Error::invalid_params("Missing 'exclude_used' parameter."))?
+        .as_bool()
+        .ok_or_else(|| Error::invalid_params("Invalid 'exclude_used' parameter."))?;
+    let limit = params
+        .get(2, "limit")
+        .ok_or_else(|| Error::invalid_params("Missing 'limit' parameter."))?
+        .as_u64()
+        .and_then(|l| l.try_into().ok())
+        .ok_or_else(|| Error::invalid_params("Invalid 'limit' parameter."))?;
+    // A missing value and `null` are both mapped to `None`.
+    let continue_from = if let Some(cf) = params.get(3, "continue_from") {
+        if cf.as_null().is_some() {
+            None
+        } else {
+            let cf_u32: u32 = cf
+                .as_u64()
+                .and_then(|a| a.try_into().ok())
+                .ok_or_else(|| Error::invalid_params("Invalid 'continue_from' parameter."))?;
+            Some(cf_u32)
+        }
+    } else {
+        None
+    };
+
+    let res = &control.list_revealed_addresses(
+        is_change,
+        exclude_used,
+        limit,
+        continue_from.map(|cf| cf.into()),
+    )?;
+    Ok(serde_json::json!(&res))
+}
+
 fn update_deriv_indexes(
     control: &DaemonControl,
     params: Params,
@@ -492,6 +536,14 @@ pub fn handle_request(control: &mut DaemonControl, req: Request) -> Result<Respo
         "listaddresses" => {
             let params = req.params;
             list_addresses(control, params)?
+        }
+        "listrevealedaddresses" => {
+            let params = req.params.ok_or_else(|| {
+                Error::invalid_params(
+                    "The 'listrevealedaddresses' command requires 3 parameters: 'is_change', 'exclude_used' and 'limit'",
+                )
+            })?;
+            list_revealed_addresses(control, params)?
         }
         "listconfirmed" => {
             let params = req.params.ok_or_else(|| {
