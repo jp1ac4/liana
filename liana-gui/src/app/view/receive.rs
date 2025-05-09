@@ -4,7 +4,7 @@ use iced::{
     alignment::Horizontal,
     widget::{
         qr_code::{self, QRCode},
-        scrollable, Space,
+        scrollable, Button, Space,
     },
     Alignment, Length,
 };
@@ -17,7 +17,7 @@ use liana::miniscript::bitcoin::{
 
 use liana_ui::{
     component::{
-        button, card, form,
+        button, card, collapse, form,
         text::{self, *},
     },
     icon, theme,
@@ -153,12 +153,76 @@ pub fn receive<'a>(
                 // prev addresses are already ordered in descending order
                 Column::new().spacing(10).width(Length::Fill),
                 |col, (i, address)| {
-                    // Continue the row index from those of generated addresses above.
-                    col.push(address_card(
-                        addresses_count + i,
-                        address,
-                        prev_labels,
-                        labels_editing,
+                    col.push(collapse::Collapse::new(
+                        move || {
+                            Button::new(
+                                Row::new()
+                                    .spacing(30)
+                                    .push(
+                                        Container::new(
+                                            scrollable(
+                                                Column::new()
+                                                    .push(Space::with_height(Length::Fixed(10.0)))
+                                                    .push(
+                                                        p2_regular(address)
+                                                            .small()
+                                                            .style(theme::text::secondary),
+                                                    )
+                                                    // Space between the address and the scrollbar
+                                                    .push(Space::with_height(Length::Fixed(10.0))),
+                                            )
+                                            .direction(scrollable::Direction::Horizontal(
+                                                scrollable::Scrollbar::new()
+                                                    .width(2)
+                                                    .scroller_width(2),
+                                            )),
+                                        )
+                                        .width(Length::FillPortion(7)),
+                                    )
+                                    .push(
+                                        Container::new(
+                                            scrollable(
+                                                Column::new()
+                                                    .push(Space::with_height(Length::Fixed(10.0)))
+                                                    .push(
+                                                        p1_bold(
+                                                            prev_labels
+                                                                .get(&address.to_string())
+                                                                .cloned()
+                                                                .unwrap_or_default(),
+                                                        )
+                                                        .small()
+                                                        .style(theme::text::secondary),
+                                                    )
+                                                    // Space between the label and the scrollbar
+                                                    .push(Space::with_height(Length::Fixed(10.0))),
+                                            )
+                                            .direction(scrollable::Direction::Horizontal(
+                                                scrollable::Scrollbar::new()
+                                                    .width(2)
+                                                    .scroller_width(2),
+                                            )),
+                                        )
+                                        .width(Length::FillPortion(3)),
+                                    )
+                                    .push(icon::collapse_icon())
+                                    .align_y(Alignment::Center),
+                            )
+                            .style(theme::button::secondary)
+                        },
+                        move || {
+                            Button::new(card::simple(
+                                Row::new()
+                                    .push(Space::with_width(Length::Fill))
+                                    .push(icon::collapsed_icon()),
+                            ))
+                            .padding(0)
+                            .style(theme::button::transparent)
+                        },
+                        move || {
+                            // Continue the row index from those of generated addresses above.
+                            address_card(addresses_count + i, address, prev_labels, labels_editing)
+                        },
                     ))
                 },
             ),
