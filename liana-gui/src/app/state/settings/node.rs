@@ -25,7 +25,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct BitcoindSettingsState {
+pub struct NodeSettingsState {
     warning: Option<Error>,
     config_updated: bool,
 
@@ -34,7 +34,7 @@ pub struct BitcoindSettingsState {
     rescan_settings: RescanSetting,
 }
 
-impl BitcoindSettingsState {
+impl NodeSettingsState {
     pub fn new(
         config: Option<Config>,
         cache: &Cache,
@@ -54,7 +54,7 @@ impl BitcoindSettingsState {
                 }
                 _ => (None, None),
             };
-        BitcoindSettingsState {
+        NodeSettingsState {
             warning: None,
             config_updated: false,
             bitcoind_settings: bitcoind_config.map(|bitcoind_config| {
@@ -84,7 +84,7 @@ impl BitcoindSettingsState {
     }
 }
 
-impl State for BitcoindSettingsState {
+impl State for NodeSettingsState {
     fn update(
         &mut self,
         daemon: Arc<dyn Daemon + Sync + Send>,
@@ -100,7 +100,7 @@ impl State for BitcoindSettingsState {
                         settings.edited(true);
                         return Task::perform(async {}, |_| {
                             Message::View(view::Message::Settings(
-                                view::SettingsMessage::EditBitcoindSettings,
+                                view::SettingsMessage::EditNodeSettings,
                             ))
                         });
                     }
@@ -108,7 +108,7 @@ impl State for BitcoindSettingsState {
                         settings.edited(true);
                         return Task::perform(async {}, |_| {
                             Message::View(view::Message::Settings(
-                                view::SettingsMessage::EditBitcoindSettings,
+                                view::SettingsMessage::EditNodeSettings,
                             ))
                         });
                     }
@@ -177,7 +177,7 @@ impl State for BitcoindSettingsState {
                 .map(|settings| settings.edit)
                 == Some(true);
         let can_do_rescan = !self.rescan_settings.processing && !settings_edit;
-        view::settings::bitcoind_settings(
+        view::settings::node_settings(
             cache,
             self.warning.as_ref(),
             if self.bitcoind_settings.is_some() || self.electrum_settings.is_some() {
@@ -212,8 +212,8 @@ impl State for BitcoindSettingsState {
     }
 }
 
-impl From<BitcoindSettingsState> for Box<dyn State> {
-    fn from(s: BitcoindSettingsState) -> Box<dyn State> {
+impl From<NodeSettingsState> for Box<dyn State> {
+    fn from(s: NodeSettingsState) -> Box<dyn State> {
         Box::new(s)
     }
 }
