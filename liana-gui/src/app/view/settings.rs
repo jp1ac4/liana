@@ -119,7 +119,7 @@ pub fn list(cache: &Cache, is_remote_backend: bool) -> Element<Message> {
         "Node",
         None,
         icon::bitcoin_icon(),
-        Message::Settings(SettingsMessage::EditBitcoindSettings),
+        Message::Settings(SettingsMessage::EditNodeSettings),
     );
 
     let backend = settings_section(
@@ -165,12 +165,12 @@ pub fn list(cache: &Cache, is_remote_backend: bool) -> Element<Message> {
     )
 }
 
-pub fn bitcoind_settings<'a>(
+pub fn node_settings<'a>(
     cache: &'a Cache,
     warning: Option<&Error>,
     settings: Vec<Element<'a, Message>>,
 ) -> Element<'a, Message> {
-    let header = header("Node", SettingsMessage::EditBitcoindSettings);
+    let header = header("Node", SettingsMessage::EditNodeSettings);
 
     dashboard(
         &Menu::Settings,

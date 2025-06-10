@@ -82,7 +82,7 @@ pub enum SpendTxMessage {
 
 #[derive(Debug, Clone)]
 pub enum SettingsMessage {
-    EditBitcoindSettings,
+    EditNodeSettings,
     BitcoindSettings(SettingsEditMessage),
     ElectrumSettings(SettingsEditMessage),
     RescanSettings(SettingsEditMessage),
