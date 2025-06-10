@@ -1,5 +1,5 @@
-mod bitcoind;
 mod general;
+mod node;
 mod wallet;
 
 use std::convert::From;
@@ -9,7 +9,7 @@ use iced::Task;
 
 use liana_ui::{component::form, widget::Element};
 
-use bitcoind::BitcoindSettingsState;
+use node::NodeSettingsState;
 use wallet::{update_aliases, WalletSettingsState};
 
 use crate::{
@@ -73,9 +73,9 @@ impl State for SettingsState {
                     .map(|s| s.reload(daemon, wallet))
                     .unwrap_or_else(Task::none)
             }
-            Message::View(view::Message::Settings(view::SettingsMessage::EditBitcoindSettings)) => {
+            Message::View(view::Message::Settings(view::SettingsMessage::EditNodeSettings)) => {
                 self.setting = Some(
-                    BitcoindSettingsState::new(
+                    NodeSettingsState::new(
                         daemon.config().cloned(),
                         cache,
                         !daemon.backend().is_embedded(),
