@@ -371,9 +371,9 @@ impl BitcoindSettings {
                 self.processing,
             )
         } else {
-            view::settings::bitcoind(
+            view::settings::node(
                 self.bitcoin_config.network,
-                &self.bitcoind_config,
+                &BitcoinBackend::Bitcoind(self.bitcoind_config.clone()),
                 cache.blockheight(),
                 Some(cache.blockheight() != 0),
                 can_edit && !self.daemon_is_external && !self.bitcoind_is_internal,
@@ -480,9 +480,9 @@ impl ElectrumSettings {
                 self.electrum_config.validate_domain,
             )
         } else {
-            view::settings::electrum(
+            view::settings::node(
                 self.bitcoin_config.network,
-                &self.electrum_config,
+                &BitcoinBackend::Electrum(self.electrum_config.clone()),
                 cache.blockheight(),
                 Some(cache.blockheight() != 0),
                 can_edit && !self.daemon_is_external,

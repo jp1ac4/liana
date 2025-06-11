@@ -39,6 +39,7 @@ use crate::{
     node::{
         bitcoind::{RpcAuthType, RpcAuthValues},
         electrum::{self, validate_domain_checkbox},
+        NodeType,
     },
 };
 
@@ -527,9 +528,9 @@ pub fn bitcoind_edit<'a>(
     .into()
 }
 
-pub fn bitcoind<'a>(
+pub fn node<'a>(
     network: Network,
-    config: &lianad::config::BitcoindConfig,
+    backend: &lianad::config::BitcoinBackend,
     blockheight: i32,
     is_running: Option<bool>,
     can_edit: bool,
@@ -540,18 +541,26 @@ pub fn bitcoind<'a>(
             .push(node_info(network, blockheight))
             .push(separation().width(Length::Fill));
     }
+    let node_type: NodeType = backend.into();
 
     let mut rows = vec![];
-    match &config.rpc_auth {
-        BitcoindRpcAuth::CookieFile(path) => {
-            rows.push(("Cookie file path:", path.to_str().unwrap().to_string()));
+    match backend {
+        lianad::config::BitcoinBackend::Bitcoind(config) => {
+            match &config.rpc_auth {
+                BitcoindRpcAuth::CookieFile(path) => {
+                    rows.push(("Cookie file path:", path.to_str().unwrap().to_string()));
+                }
+                BitcoindRpcAuth::UserPass(user, password) => {
+                    rows.push(("User:", user.clone()));
+                    rows.push(("Password:", password.clone()));
+                }
+            }
+            rows.push(("Socket address:", config.addr.to_string()));
         }
-        BitcoindRpcAuth::UserPass(user, password) => {
-            rows.push(("User:", user.clone()));
-            rows.push(("Password:", password.clone()));
+        lianad::config::BitcoinBackend::Electrum(config) => {
+            rows.push(("Address:", config.addr.to_string()));
         }
     }
-    rows.push(("Socket address:", config.addr.to_string()));
 
     let mut col_fields = Column::new();
     for (k, v) in rows {
@@ -597,7 +606,13 @@ pub fn bitcoind<'a>(
                     .push(
                         Row::new()
                             .push(badge::badge(icon::bitcoin_icon()))
-                            .push(text("Bitcoin Core").bold())
+                            .push(
+                                text(match node_type {
+                                    NodeType::Bitcoind => "Bitcoin Core",
+                                    NodeType::Electrum => "Electrum",
+                                })
+                                .bold(),
+                            )
                             .push(is_running_label(is_running))
                             .spacing(20)
                             .align_y(Alignment::Center)
@@ -684,68 +699,6 @@ pub fn electrum_edit<'a>(
                 .width(Length::Fill)
                 .align_x(alignment::Horizontal::Right),
             )
-            .spacing(20),
-    ))
-    .width(Length::Fill)
-    .into()
-}
-
-pub fn electrum<'a>(
-    network: Network,
-    config: &lianad::config::ElectrumConfig,
-    blockheight: i32,
-    is_running: Option<bool>,
-    can_edit: bool,
-) -> Element<'a, SettingsEditMessage> {
-    let mut col = Column::new().spacing(20);
-    if blockheight != 0 {
-        col = col
-            .push(node_info(network, blockheight))
-            .push(separation().width(Length::Fill));
-    }
-
-    let rows = vec![("Address:", config.addr.to_string())];
-
-    let mut col_fields = Column::new();
-    for (k, v) in rows {
-        col_fields = col_fields.push(
-            Row::new()
-                .push(Container::new(text(k).bold().small()).width(Length::Fill))
-                .push(text(v.clone()).small())
-                .push(Space::with_width(10))
-                .push(
-                    Button::new(icon::clipboard_icon())
-                        .style(theme::button::transparent_border)
-                        .on_press(SettingsEditMessage::Clipboard(v.to_string())),
-                )
-                .align_y(Alignment::Center),
-        );
-    }
-
-    card::simple(Container::new(
-        Column::new()
-            .push(
-                Row::new()
-                    .push(
-                        Row::new()
-                            .push(badge::badge(icon::bitcoin_icon()))
-                            .push(text("Electrum").bold())
-                            .push(is_running_label(is_running))
-                            .spacing(20)
-                            .align_y(Alignment::Center)
-                            .width(Length::Fill),
-                    )
-                    .push(if can_edit {
-                        Button::new(icon::pencil_icon())
-                            .style(theme::button::transparent_border)
-                            .on_press(SettingsEditMessage::Select)
-                    } else {
-                        Button::new(icon::pencil_icon()).style(theme::button::transparent_border)
-                    })
-                    .align_y(Alignment::Center),
-            )
-            .push(separation().width(Length::Fill))
-            .push(col.push(col_fields))
             .spacing(20),
     ))
     .width(Length::Fill)
