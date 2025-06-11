@@ -349,6 +349,32 @@ pub fn remote_backend_section<'a>(
     )
 }
 
+fn node_info(network: Network, blockheight: i32) -> Row<'static, SettingsEditMessage> {
+    Row::new()
+        .push(
+            Row::new()
+                .push(badge::badge(icon::network_icon()))
+                .push(
+                    Column::new()
+                        .push(text("Network:"))
+                        .push(text(network.to_string()).bold()),
+                )
+                .spacing(10)
+                .width(Length::FillPortion(1)),
+        )
+        .push(
+            Row::new()
+                .push(badge::badge(icon::block_icon()))
+                .push(
+                    Column::new()
+                        .push(text("Block Height:"))
+                        .push(text(blockheight.to_string()).bold()),
+                )
+                .spacing(10)
+                .width(Length::FillPortion(1)),
+        )
+}
+
 pub fn bitcoind_edit<'a>(
     is_configured_node_type: bool,
     network: Network,
@@ -361,31 +387,7 @@ pub fn bitcoind_edit<'a>(
     let mut col = Column::new().spacing(20);
     if is_configured_node_type && blockheight != 0 {
         col = col
-            .push(
-                Row::new()
-                    .push(
-                        Row::new()
-                            .push(badge::badge(icon::network_icon()))
-                            .push(
-                                Column::new()
-                                    .push(text("Network:"))
-                                    .push(text(network.to_string()).bold()),
-                            )
-                            .spacing(10)
-                            .width(Length::FillPortion(1)),
-                    )
-                    .push(
-                        Row::new()
-                            .push(badge::badge(icon::block_icon()))
-                            .push(
-                                Column::new()
-                                    .push(text("Block Height:"))
-                                    .push(text(blockheight.to_string()).bold()),
-                            )
-                            .spacing(10)
-                            .width(Length::FillPortion(1)),
-                    ),
-            )
+            .push(node_info(network, blockheight))
             .push(separation().width(Length::Fill));
     }
 
@@ -507,31 +509,7 @@ pub fn bitcoind<'a>(
     let mut col = Column::new().spacing(20);
     if is_configured_node_type && blockheight != 0 {
         col = col
-            .push(
-                Row::new()
-                    .push(
-                        Row::new()
-                            .push(badge::badge(icon::network_icon()))
-                            .push(
-                                Column::new()
-                                    .push(text("Network:"))
-                                    .push(text(network.to_string()).bold()),
-                            )
-                            .spacing(10)
-                            .width(Length::FillPortion(1)),
-                    )
-                    .push(
-                        Row::new()
-                            .push(badge::badge(icon::block_icon()))
-                            .push(
-                                Column::new()
-                                    .push(text("Block Height:"))
-                                    .push(text(blockheight.to_string()).bold()),
-                            )
-                            .spacing(10)
-                            .width(Length::FillPortion(1)),
-                    ),
-            )
+            .push(node_info(network, blockheight))
             .push(separation().width(Length::Fill));
     }
 
@@ -631,31 +609,7 @@ pub fn electrum_edit<'a>(
     let mut col = Column::new().spacing(20);
     if is_configured_node_type && blockheight != 0 {
         col = col
-            .push(
-                Row::new()
-                    .push(
-                        Row::new()
-                            .push(badge::badge(icon::network_icon()))
-                            .push(
-                                Column::new()
-                                    .push(text("Network:"))
-                                    .push(text(network.to_string()).bold()),
-                            )
-                            .spacing(10)
-                            .width(Length::FillPortion(1)),
-                    )
-                    .push(
-                        Row::new()
-                            .push(badge::badge(icon::block_icon()))
-                            .push(
-                                Column::new()
-                                    .push(text("Block Height:"))
-                                    .push(text(blockheight.to_string()).bold()),
-                            )
-                            .spacing(10)
-                            .width(Length::FillPortion(1)),
-                    ),
-            )
+            .push(node_info(network, blockheight))
             .push(separation().width(Length::Fill));
     }
 
@@ -726,31 +680,7 @@ pub fn electrum<'a>(
     let mut col = Column::new().spacing(20);
     if is_configured_node_type && blockheight != 0 {
         col = col
-            .push(
-                Row::new()
-                    .push(
-                        Row::new()
-                            .push(badge::badge(icon::network_icon()))
-                            .push(
-                                Column::new()
-                                    .push(text("Network:"))
-                                    .push(text(network.to_string()).bold()),
-                            )
-                            .spacing(10)
-                            .width(Length::FillPortion(1)),
-                    )
-                    .push(
-                        Row::new()
-                            .push(badge::badge(icon::block_icon()))
-                            .push(
-                                Column::new()
-                                    .push(text("Block Height:"))
-                                    .push(text(blockheight.to_string()).bold()),
-                            )
-                            .spacing(10)
-                            .width(Length::FillPortion(1)),
-                    ),
-            )
+            .push(node_info(network, blockheight))
             .push(separation().width(Length::Fill));
     }
 
