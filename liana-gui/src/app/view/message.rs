@@ -1,5 +1,9 @@
-use crate::{app::menu::Menu, export::ImportExportMessage, node::bitcoind::RpcAuthType};
+use crate::{app::menu::Menu, export::ImportExportMessage};
 use liana::miniscript::bitcoin::{bip32::Fingerprint, Address, OutPoint};
+
+pub use crate::node::{bitcoind::DefineBitcoind, electrum::DefineElectrum};
+
+pub type DefineNode = crate::node::DefineNode<()>;
 
 pub trait Close {
     fn close() -> Self;
@@ -83,8 +87,7 @@ pub enum SpendTxMessage {
 #[derive(Debug, Clone)]
 pub enum SettingsMessage {
     EditNodeSettings,
-    BitcoindSettings(SettingsEditMessage),
-    ElectrumSettings(SettingsEditMessage),
+    NodeSettings(SettingsEditMessage),
     RescanSettings(SettingsEditMessage),
     ImportExport(ImportExportMessage),
     EditRemoteBackendSettings,
@@ -112,9 +115,8 @@ pub enum RemoteBackendSettingsMessage {
 #[derive(Debug, Clone)]
 pub enum SettingsEditMessage {
     Select,
+    Node(DefineNode),
     FieldEdited(&'static str, String),
-    ValidateDomainEdited(bool),
-    BitcoindRpcAuthTypeSelected(RpcAuthType),
     Cancel,
     Confirm,
     Clipboard(String),
