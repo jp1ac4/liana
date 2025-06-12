@@ -376,7 +376,6 @@ fn node_info(network: Network, blockheight: i32) -> Row<'static, SettingsEditMes
 }
 
 pub fn bitcoind_edit<'a>(
-    is_configured_node_type: bool,
     network: Network,
     blockheight: i32,
     addr: &form::Value<String>,
@@ -385,7 +384,7 @@ pub fn bitcoind_edit<'a>(
     processing: bool,
 ) -> Element<'a, SettingsEditMessage> {
     let mut col = Column::new().spacing(20);
-    if is_configured_node_type && blockheight != 0 {
+    if blockheight != 0 {
         col = col
             .push(node_info(network, blockheight))
             .push(separation().width(Length::Fill));
@@ -499,7 +498,6 @@ pub fn bitcoind_edit<'a>(
 }
 
 pub fn bitcoind<'a>(
-    is_configured_node_type: bool,
     network: Network,
     config: &lianad::config::BitcoindConfig,
     blockheight: i32,
@@ -507,25 +505,23 @@ pub fn bitcoind<'a>(
     can_edit: bool,
 ) -> Element<'a, SettingsEditMessage> {
     let mut col = Column::new().spacing(20);
-    if is_configured_node_type && blockheight != 0 {
+    if blockheight != 0 {
         col = col
             .push(node_info(network, blockheight))
             .push(separation().width(Length::Fill));
     }
 
     let mut rows = vec![];
-    if is_configured_node_type {
-        match &config.rpc_auth {
-            BitcoindRpcAuth::CookieFile(path) => {
-                rows.push(("Cookie file path:", path.to_str().unwrap().to_string()));
-            }
-            BitcoindRpcAuth::UserPass(user, password) => {
-                rows.push(("User:", user.clone()));
-                rows.push(("Password:", password.clone()));
-            }
+    match &config.rpc_auth {
+        BitcoindRpcAuth::CookieFile(path) => {
+            rows.push(("Cookie file path:", path.to_str().unwrap().to_string()));
         }
-        rows.push(("Socket address:", config.addr.to_string()));
+        BitcoindRpcAuth::UserPass(user, password) => {
+            rows.push(("User:", user.clone()));
+            rows.push(("Password:", password.clone()));
+        }
     }
+    rows.push(("Socket address:", config.addr.to_string()));
 
     let mut col_fields = Column::new();
     for (k, v) in rows {
@@ -572,11 +568,7 @@ pub fn bitcoind<'a>(
                         Row::new()
                             .push(badge::badge(icon::bitcoin_icon()))
                             .push(text("Bitcoin Core").bold())
-                            .push_maybe(if is_configured_node_type {
-                                Some(is_running_label(is_running))
-                            } else {
-                                None
-                            })
+                            .push(is_running_label(is_running))
                             .spacing(20)
                             .align_y(Alignment::Center)
                             .width(Length::Fill),
@@ -599,7 +591,6 @@ pub fn bitcoind<'a>(
 }
 
 pub fn electrum_edit<'a>(
-    is_configured_node_type: bool,
     network: Network,
     blockheight: i32,
     addr: &form::Value<String>,
@@ -607,7 +598,7 @@ pub fn electrum_edit<'a>(
     validate_domain: bool,
 ) -> Element<'a, SettingsEditMessage> {
     let mut col = Column::new().spacing(20);
-    if is_configured_node_type && blockheight != 0 {
+    if blockheight != 0 {
         col = col
             .push(node_info(network, blockheight))
             .push(separation().width(Length::Fill));
@@ -670,7 +661,6 @@ pub fn electrum_edit<'a>(
 }
 
 pub fn electrum<'a>(
-    is_configured_node_type: bool,
     network: Network,
     config: &lianad::config::ElectrumConfig,
     blockheight: i32,
@@ -678,17 +668,13 @@ pub fn electrum<'a>(
     can_edit: bool,
 ) -> Element<'a, SettingsEditMessage> {
     let mut col = Column::new().spacing(20);
-    if is_configured_node_type && blockheight != 0 {
+    if blockheight != 0 {
         col = col
             .push(node_info(network, blockheight))
             .push(separation().width(Length::Fill));
     }
 
-    let rows = if is_configured_node_type {
-        vec![("Address:", config.addr.to_string())]
-    } else {
-        vec![]
-    };
+    let rows = vec![("Address:", config.addr.to_string())];
 
     let mut col_fields = Column::new();
     for (k, v) in rows {
@@ -714,11 +700,7 @@ pub fn electrum<'a>(
                         Row::new()
                             .push(badge::badge(icon::bitcoin_icon()))
                             .push(text("Electrum").bold())
-                            .push_maybe(if is_configured_node_type {
-                                Some(is_running_label(is_running))
-                            } else {
-                                None
-                            })
+                            .push(is_running_label(is_running))
                             .spacing(20)
                             .align_y(Alignment::Center)
                             .width(Length::Fill),
