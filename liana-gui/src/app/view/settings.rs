@@ -34,7 +34,7 @@ use crate::{
     },
     hw::HardwareWallet,
     node::{
-        bitcoind::{RpcAuthType, RpcAuthValues},
+        bitcoind::{self, RpcAuthType, RpcAuthValues},
         electrum::{self, validate_domain_checkbox},
         NodeType,
     },
@@ -404,7 +404,11 @@ pub fn bitcoind_edit<'a>(
                             format!("{}", auth_type),
                             *auth_type,
                             Some(*selected_auth_type),
-                            SettingsEditMessage::BitcoindRpcAuthTypeSelected,
+                            |d| {
+                                SettingsEditMessage::Node(DefineNode::DefineBitcoind(
+                                    DefineBitcoind::RpcAuthTypeSelected(d),
+                                ))
+                            },
                         ))
                         .spacing(30)
                         .align_y(Alignment::Center)
@@ -417,7 +421,14 @@ pub fn bitcoind_edit<'a>(
                     form::Form::new_trimmed(
                         "Cookie file path",
                         &rpc_auth_vals.cookie_path,
-                        |value| SettingsEditMessage::FieldEdited("cookie_file_path", value),
+                        |value| {
+                            SettingsEditMessage::Node(DefineNode::DefineBitcoind(
+                                DefineBitcoind::ConfigFieldEdited(
+                                    bitcoind::ConfigField::CookieFilePath,
+                                    value,
+                                ),
+                            ))
+                        },
                     )
                     .warning("Please enter a valid filesystem path")
                     .size(P1_SIZE)
@@ -429,7 +440,12 @@ pub fn bitcoind_edit<'a>(
                     Row::new()
                         .push(
                             form::Form::new_trimmed("User", &rpc_auth_vals.user, |value| {
-                                SettingsEditMessage::FieldEdited("user", value)
+                                SettingsEditMessage::Node(DefineNode::DefineBitcoind(
+                                    DefineBitcoind::ConfigFieldEdited(
+                                        bitcoind::ConfigField::User,
+                                        value,
+                                    ),
+                                ))
                             })
                             .warning("Please enter a valid user")
                             .size(P1_SIZE)
@@ -437,7 +453,12 @@ pub fn bitcoind_edit<'a>(
                         )
                         .push(
                             form::Form::new_trimmed("Password", &rpc_auth_vals.password, |value| {
-                                SettingsEditMessage::FieldEdited("password", value)
+                                SettingsEditMessage::Node(DefineNode::DefineBitcoind(
+                                    DefineBitcoind::ConfigFieldEdited(
+                                        bitcoind::ConfigField::Password,
+                                        value,
+                                    ),
+                                ))
                             })
                             .warning("Please enter a valid password")
                             .size(P1_SIZE)
@@ -452,7 +473,12 @@ pub fn bitcoind_edit<'a>(
                 .push(text("Socket address:").bold().small())
                 .push(
                     form::Form::new_trimmed("Socket address:", addr, |value| {
-                        SettingsEditMessage::FieldEdited("socket_address", value)
+                        SettingsEditMessage::Node(DefineNode::DefineBitcoind(
+                            DefineBitcoind::ConfigFieldEdited(
+                                bitcoind::ConfigField::Address,
+                                value,
+                            ),
+                        ))
                     })
                     .warning("Please enter a valid address")
                     .size(P1_SIZE)
@@ -620,14 +646,18 @@ pub fn electrum_edit<'a>(
     }
 
     let checkbox = validate_domain_checkbox(addr, validate_domain, |b| {
-        SettingsEditMessage::ValidateDomainEdited(b)
+        SettingsEditMessage::Node(DefineNode::DefineElectrum(
+            DefineElectrum::ValidDomainChanged(b),
+        ))
     });
     col = col.push(
         Column::new()
             .push(text("Address:").bold().small())
             .push(
                 form::Form::new_trimmed("127:0.0.1:50001", addr, |value| {
-                    SettingsEditMessage::FieldEdited("address", value)
+                    SettingsEditMessage::Node(DefineNode::DefineElectrum(
+                        DefineElectrum::ConfigFieldEdited(electrum::ConfigField::Address, value),
+                    ))
                 })
                 .warning("Please enter a valid address")
                 .size(P1_SIZE)
