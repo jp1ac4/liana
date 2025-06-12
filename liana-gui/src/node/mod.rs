@@ -17,3 +17,12 @@ impl From<&BitcoinBackend> for NodeType {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub enum DefineNode<E> {
+    NodeTypeSelected(NodeType),
+    DefineBitcoind(bitcoind::DefineBitcoind),
+    DefineElectrum(electrum::DefineElectrum),
+    PingResult((NodeType, Result<(), E>)),
+    Ping,
+}

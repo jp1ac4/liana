@@ -22,6 +22,12 @@ impl fmt::Display for ConfigField {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum DefineElectrum {
+    ConfigFieldEdited(ConfigField, String),
+    ValidDomainChanged(bool),
+}
+
 pub fn validate_domain_checkbox<'a, F, M>(
     addr: &form::Value<String>,
     value: bool,

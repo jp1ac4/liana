@@ -18,15 +18,16 @@ use crate::{
     export::ImportExportMessage,
     hw::HardwareWalletMessage,
     installer::descriptor::{Key, PathKind},
-    node::{
-        bitcoind::{Bitcoind, ConfigField, RpcAuthType},
-        electrum, NodeType,
-    },
+    node::{self, bitcoind::Bitcoind},
     services::{
         self,
         connect::client::{auth::AuthClient, backend::api},
     },
 };
+
+pub use node::{bitcoind::DefineBitcoind, electrum::DefineElectrum};
+
+pub type DefineNode = node::DefineNode<Error>;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -115,27 +116,6 @@ pub enum ImportRemoteWallet {
     InvitationFetched(Result<api::WalletInvitation, Error>),
     AcceptInvitation,
     InvitationAccepted(Result<api::Wallet, Error>),
-}
-
-#[derive(Debug, Clone)]
-pub enum DefineBitcoind {
-    ConfigFieldEdited(ConfigField, String),
-    RpcAuthTypeSelected(RpcAuthType),
-}
-
-#[derive(Debug, Clone)]
-pub enum DefineElectrum {
-    ConfigFieldEdited(electrum::ConfigField, String),
-    ValidDomainChanged(bool),
-}
-
-#[derive(Debug, Clone)]
-pub enum DefineNode {
-    NodeTypeSelected(NodeType),
-    DefineBitcoind(DefineBitcoind),
-    DefineElectrum(DefineElectrum),
-    PingResult((NodeType, Result<(), Error>)),
-    Ping,
 }
 
 #[derive(Debug, Clone)]
