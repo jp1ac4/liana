@@ -689,6 +689,12 @@ impl fmt::Display for ConfigField {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum DefineBitcoind {
+    ConfigFieldEdited(ConfigField, String),
+    RpcAuthTypeSelected(RpcAuthType),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
