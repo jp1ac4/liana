@@ -14,10 +14,19 @@ use lianad::config::{BitcoinBackend, BitcoindConfig, BitcoindRpcAuth, Config, El
 use liana_ui::{component::form, widget::Element};
 
 use crate::{
-    app::{cache::Cache, error::Error, message::Message, state::settings::State, view},
+    app::{
+        cache::Cache,
+        error::Error,
+        message::Message,
+        state::settings::State,
+        view::{self, DefineNode},
+    },
     daemon::Daemon,
     help,
-    node::bitcoind::{RpcAuthType, RpcAuthValues},
+    node::{
+        bitcoind::{self, DefineBitcoind, RpcAuthType, RpcAuthValues},
+        electrum::{self, DefineElectrum},
+    },
 };
 
 #[derive(Debug)]
@@ -111,16 +120,10 @@ impl State for NodeSettingsState {
             Message::UpdatePanelCache(_) => {
                 self.rescan_settings.processing = cache.rescan_progress().is_some_and(|p| p < 1.0);
             }
-            Message::View(view::Message::Settings(view::SettingsMessage::BitcoindSettings(
-                msg,
-            ))) => {
+            Message::View(view::Message::Settings(view::SettingsMessage::NodeSettings(msg))) => {
                 if let Some(settings) = &mut self.bitcoind_settings {
                     return settings.update(daemon, cache, msg);
                 }
-            }
-            Message::View(view::Message::Settings(view::SettingsMessage::ElectrumSettings(
-                msg,
-            ))) => {
                 if let Some(settings) = &mut self.electrum_settings {
                     return settings.update(daemon, cache, msg);
                 }
@@ -157,14 +160,14 @@ impl State for NodeSettingsState {
                 if let Some(settings) = self.bitcoind_settings.as_ref() {
                     setting_panels.push(settings.view(cache, can_edit_bitcoind_settings).map(
                         move |msg| {
-                            view::Message::Settings(view::SettingsMessage::BitcoindSettings(msg))
+                            view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
                         },
                     ))
                 }
                 if let Some(settings) = self.electrum_settings.as_ref() {
                     setting_panels.push(settings.view(cache, can_edit_electrum_settings).map(
                         move |msg| {
-                            view::Message::Settings(view::SettingsMessage::ElectrumSettings(msg))
+                            view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
                         },
                     ))
                 }
@@ -285,21 +288,27 @@ impl BitcoindSettings {
                     self.edit = false;
                 }
             }
-            view::SettingsEditMessage::FieldEdited(field, value) => {
+            view::SettingsEditMessage::Node(DefineNode::DefineBitcoind(msg)) => {
                 if !self.processing {
-                    match field {
-                        "socket_address" => self.addr.value = value,
-                        "cookie_file_path" => self.rpc_auth_vals.cookie_path.value = value,
-                        "user" => self.rpc_auth_vals.user.value = value,
-                        "password" => self.rpc_auth_vals.password.value = value,
-                        _ => {}
+                    match msg {
+                        DefineBitcoind::ConfigFieldEdited(field, value) => match field {
+                            bitcoind::ConfigField::Address => {
+                                self.addr.value = value;
+                            }
+                            bitcoind::ConfigField::CookieFilePath => {
+                                self.rpc_auth_vals.cookie_path.value = value;
+                            }
+                            bitcoind::ConfigField::User => {
+                                self.rpc_auth_vals.user.value = value;
+                            }
+                            bitcoind::ConfigField::Password => {
+                                self.rpc_auth_vals.password.value = value;
+                            }
+                        },
+                        DefineBitcoind::RpcAuthTypeSelected(auth_type) => {
+                            self.selected_auth_type = auth_type;
+                        }
                     }
-                }
-            }
-            view::SettingsEditMessage::ValidateDomainEdited(_) => {}
-            view::SettingsEditMessage::BitcoindRpcAuthTypeSelected(auth_type) => {
-                if !self.processing {
-                    self.selected_auth_type = auth_type;
                 }
             }
             view::SettingsEditMessage::Confirm => {
@@ -336,6 +345,7 @@ impl BitcoindSettings {
                 }
             }
             view::SettingsEditMessage::Clipboard(text) => return clipboard::write(text),
+            _ => {}
         };
         Task::none()
     }
@@ -413,10 +423,19 @@ impl ElectrumSettings {
                     self.edit = false;
                 }
             }
-            view::SettingsEditMessage::FieldEdited(field, value) => {
-                if !self.processing && field == "address" {
-                    self.addr.valid = crate::node::electrum::is_electrum_address_valid(&value);
-                    self.addr.value = value;
+            view::SettingsEditMessage::Node(DefineNode::DefineElectrum(msg)) => {
+                if !self.processing {
+                    match msg {
+                        DefineElectrum::ConfigFieldEdited(field, value) => match field {
+                            electrum::ConfigField::Address => {
+                                self.addr.valid = electrum::is_electrum_address_valid(&value);
+                                self.addr.value = value;
+                            }
+                        },
+                        DefineElectrum::ValidDomainChanged(b) => {
+                            self.electrum_config.validate_domain = b;
+                        }
+                    }
                 }
             }
             view::SettingsEditMessage::Confirm => {
@@ -434,11 +453,6 @@ impl ElectrumSettings {
                 }
             }
             view::SettingsEditMessage::Clipboard(text) => return clipboard::write(text),
-            view::SettingsEditMessage::ValidateDomainEdited(b) => {
-                if !self.processing {
-                    self.electrum_config.validate_domain = b;
-                }
-            }
             _ => {}
         };
         Task::none()
