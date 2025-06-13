@@ -349,21 +349,21 @@ impl BitcoindSettings {
 
 #[derive(Debug)]
 pub struct ElectrumSettings {
-    electrum_config: ElectrumConfig,
     processing: bool,
     addr: form::Value<String>,
+    validate_domain: bool,
 }
 
 impl ElectrumSettings {
     fn new(electrum_config: ElectrumConfig) -> ElectrumSettings {
         let addr = electrum_config.addr.to_string();
         ElectrumSettings {
-            electrum_config,
             processing: false,
             addr: form::Value {
                 valid: true,
                 value: addr,
             },
+            validate_domain: electrum_config.validate_domain,
         }
     }
 }
@@ -390,7 +390,7 @@ impl ElectrumSettings {
                             }
                         },
                         DefineElectrum::ValidDomainChanged(b) => {
-                            self.electrum_config.validate_domain = b;
+                            self.validate_domain = b;
                         }
                     }
                 }
@@ -401,7 +401,7 @@ impl ElectrumSettings {
                     daemon_config.bitcoin_backend =
                         Some(lianad::config::BitcoinBackend::Electrum(ElectrumConfig {
                             addr: self.addr.value.clone(),
-                            validate_domain: self.electrum_config.validate_domain,
+                            validate_domain: self.validate_domain,
                         }));
                     self.processing = true;
                     return Task::perform(async move { daemon_config }, |cfg| {
@@ -421,7 +421,7 @@ impl ElectrumSettings {
             cache.blockheight,
             &self.addr,
             self.processing,
-            self.electrum_config.validate_domain,
+            self.validate_domain,
         )
     }
 }
