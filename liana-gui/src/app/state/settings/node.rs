@@ -152,42 +152,29 @@ impl State for NodeSettingsState {
                 .map(|settings| settings.edit)
                 == Some(true);
         let can_do_rescan = !self.rescan_settings.processing && !settings_edit;
-        view::settings::node_settings(
-            cache,
-            self.warning.as_ref(),
-            if self.bitcoind_settings.is_some() || self.electrum_settings.is_some() {
-                let mut setting_panels = Vec::new();
-                if let Some(settings) = self.bitcoind_settings.as_ref() {
-                    setting_panels.push(settings.view(cache, can_edit_bitcoind_settings).map(
-                        move |msg| {
-                            view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
-                        },
-                    ))
-                }
-                if let Some(settings) = self.electrum_settings.as_ref() {
-                    setting_panels.push(settings.view(cache, can_edit_electrum_settings).map(
-                        move |msg| {
-                            view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
-                        },
-                    ))
-                }
-                setting_panels.push(view::settings::link(
-                    help::CHANGE_BACKEND_OR_NODE_URL,
-                    "I want to change node type or use Liana Connect",
-                ));
-                setting_panels.push(self.rescan_settings.view(cache, can_do_rescan).map(
-                    move |msg| view::Message::Settings(view::SettingsMessage::RescanSettings(msg)),
-                ));
-                setting_panels
-            } else {
-                vec![self
-                    .rescan_settings
-                    .view(cache, can_do_rescan)
-                    .map(move |msg| {
-                        view::Message::Settings(view::SettingsMessage::RescanSettings(msg))
-                    })]
+        let mut setting_panels = Vec::new();
+        if self.bitcoind_settings.is_some() || self.electrum_settings.is_some() {
+            if let Some(settings) = self.bitcoind_settings.as_ref() {
+                setting_panels.push(settings.view(cache, can_edit_bitcoind_settings).map(
+                    move |msg| view::Message::Settings(view::SettingsMessage::NodeSettings(msg)),
+                ))
+            }
+            if let Some(settings) = self.electrum_settings.as_ref() {
+                setting_panels.push(settings.view(cache, can_edit_electrum_settings).map(
+                    move |msg| view::Message::Settings(view::SettingsMessage::NodeSettings(msg)),
+                ))
+            }
+            setting_panels.push(view::settings::link(
+                help::CHANGE_BACKEND_OR_NODE_URL,
+                "I want to change node type or use Liana Connect",
+            ));
+        }
+        setting_panels.push(self.rescan_settings.view(cache, can_do_rescan).map(
+            move |msg: view::SettingsEditMessage| {
+                view::Message::Settings(view::SettingsMessage::RescanSettings(msg))
             },
-        )
+        ));
+        view::settings::node_settings(cache, self.warning.as_ref(), setting_panels)
     }
 }
 
