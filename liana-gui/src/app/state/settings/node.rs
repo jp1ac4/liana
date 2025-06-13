@@ -19,7 +19,7 @@ use crate::{
         error::Error,
         message::Message,
         state::settings::State,
-        view::{self, DefineNode},
+        view::{self, DefineNode, SettingsEditMessage},
     },
     daemon::Daemon,
     help,
@@ -35,6 +35,8 @@ pub struct NodeSettingsState {
     config_updated: bool,
 
     can_edit_node_settings: bool,
+    editing_node_settings: bool,
+    backend_config: Option<BitcoinBackend>,
     bitcoind_settings: Option<BitcoindSettings>,
     electrum_settings: Option<ElectrumSettings>,
     rescan_settings: RescanSetting,
@@ -42,21 +44,38 @@ pub struct NodeSettingsState {
 
 impl NodeSettingsState {
     pub fn new(config: Option<Config>, cache: &Cache, bitcoind_is_internal: bool) -> Self {
-        let (bitcoind_config, electrum_config) =
-            match config.clone().and_then(|c| c.bitcoin_backend) {
-                Some(BitcoinBackend::Bitcoind(bitcoind_config)) => (Some(bitcoind_config), None),
-                Some(BitcoinBackend::Electrum(electrum_config)) => (None, Some(electrum_config)),
-                _ => (None, None),
-            };
+        let backend_config = config.clone().and_then(|c| c.bitcoin_backend);
+        let (bitcoind_config, electrum_config) = match backend_config.as_ref() {
+            Some(BitcoinBackend::Bitcoind(bitcoind_config)) => {
+                (Some(bitcoind_config.clone()), None)
+            }
+            Some(BitcoinBackend::Electrum(electrum_config)) => {
+                (None, Some(electrum_config.clone()))
+            }
+            _ => (None, None),
+        };
         NodeSettingsState {
             warning: None,
             config_updated: false,
-            can_edit_node_settings: (bitcoind_config.is_some() || electrum_config.is_some())
-                && !bitcoind_is_internal,
+            can_edit_node_settings: backend_config.is_some() && !bitcoind_is_internal,
+            editing_node_settings: false,
+            backend_config,
             bitcoind_settings: bitcoind_config.map(BitcoindSettings::new),
             electrum_settings: electrum_config.map(ElectrumSettings::new),
             rescan_settings: RescanSetting::new(cache.rescan_progress()),
         }
+    }
+
+    fn any_node_processing(&self) -> bool {
+        self.bitcoind_settings
+            .as_ref()
+            .map(|s| s.processing)
+            .unwrap_or_default()
+            || self
+                .electrum_settings
+                .as_ref()
+                .map(|s| s.processing)
+                .unwrap_or_default()
     }
 }
 
@@ -73,7 +92,7 @@ impl State for NodeSettingsState {
                     self.config_updated = true;
                     self.warning = None;
                     if let Some(settings) = &mut self.bitcoind_settings {
-                        settings.edited(true);
+                        settings.edited();
                         return Task::perform(async {}, |_| {
                             Message::View(view::Message::Settings(
                                 view::SettingsMessage::EditNodeSettings,
@@ -81,7 +100,7 @@ impl State for NodeSettingsState {
                         });
                     }
                     if let Some(settings) = &mut self.electrum_settings {
-                        settings.edited(true);
+                        settings.edited();
                         return Task::perform(async {}, |_| {
                             Message::View(view::Message::Settings(
                                 view::SettingsMessage::EditNodeSettings,
@@ -93,10 +112,10 @@ impl State for NodeSettingsState {
                     self.config_updated = false;
                     self.warning = Some(e);
                     if let Some(settings) = &mut self.bitcoind_settings {
-                        settings.edited(false);
+                        settings.edited();
                     }
                     if let Some(settings) = &mut self.electrum_settings {
-                        settings.edited(false);
+                        settings.edited();
                     }
                 }
             },
@@ -116,11 +135,25 @@ impl State for NodeSettingsState {
                 self.rescan_settings.processing = cache.rescan_progress().is_some_and(|p| p < 1.0);
             }
             Message::View(view::Message::Settings(view::SettingsMessage::NodeSettings(msg))) => {
-                if let Some(settings) = &mut self.bitcoind_settings {
-                    return settings.update(daemon, cache, msg);
-                }
-                if let Some(settings) = &mut self.electrum_settings {
-                    return settings.update(daemon, cache, msg);
+                match msg {
+                    SettingsEditMessage::Select => {
+                        if !self.any_node_processing() {
+                            self.editing_node_settings = true;
+                        }
+                    }
+                    SettingsEditMessage::Cancel => {
+                        if !self.any_node_processing() {
+                            self.editing_node_settings = false;
+                        }
+                    }
+                    _ => {
+                        if let Some(settings) = &mut self.bitcoind_settings {
+                            return settings.update(daemon, cache, msg);
+                        }
+                        if let Some(settings) = &mut self.electrum_settings {
+                            return settings.update(daemon, cache, msg);
+                        }
+                    }
                 }
             }
             Message::View(view::Message::Settings(view::SettingsMessage::RescanSettings(msg))) => {
@@ -133,28 +166,33 @@ impl State for NodeSettingsState {
 
     fn view<'a>(&'a self, cache: &'a Cache) -> Element<'a, view::Message> {
         let can_edit = self.can_edit_node_settings && !self.rescan_settings.processing;
-        let settings_edit = self
-            .bitcoind_settings
-            .as_ref()
-            .map(|settings| settings.edit)
-            == Some(true)
-            || self
-                .electrum_settings
-                .as_ref()
-                .map(|settings| settings.edit)
-                == Some(true);
-        let can_do_rescan = !self.rescan_settings.processing && !settings_edit;
+        let can_do_rescan = !self.rescan_settings.processing && !self.editing_node_settings;
         let mut setting_panels = Vec::new();
-        if self.bitcoind_settings.is_some() || self.electrum_settings.is_some() {
-            if let Some(settings) = self.bitcoind_settings.as_ref() {
-                setting_panels.push(settings.view(cache, can_edit).map(move |msg| {
-                    view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
-                }))
-            }
-            if let Some(settings) = self.electrum_settings.as_ref() {
-                setting_panels.push(settings.view(cache, can_edit).map(move |msg| {
-                    view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
-                }))
+        if let Some(backend_config) = &self.backend_config {
+            if !self.editing_node_settings {
+                setting_panels.push(
+                    view::settings::node(
+                        cache.network,
+                        backend_config,
+                        cache.blockheight(),
+                        Some(cache.blockheight() != 0),
+                        can_edit,
+                    )
+                    .map(move |msg| {
+                        view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
+                    }),
+                );
+            } else {
+                if let Some(settings) = self.bitcoind_settings.as_ref() {
+                    setting_panels.push(settings.view(cache).map(move |msg| {
+                        view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
+                    }))
+                }
+                if let Some(settings) = self.electrum_settings.as_ref() {
+                    setting_panels.push(settings.view(cache).map(move |msg| {
+                        view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
+                    }))
+                }
             }
             setting_panels.push(view::settings::link(
                 help::CHANGE_BACKEND_OR_NODE_URL,
@@ -178,8 +216,6 @@ impl From<NodeSettingsState> for Box<dyn State> {
 
 #[derive(Debug)]
 pub struct BitcoindSettings {
-    bitcoind_config: BitcoindConfig,
-    edit: bool,
     processing: bool,
     rpc_auth_vals: RpcAuthValues,
     selected_auth_type: RpcAuthType,
@@ -220,8 +256,6 @@ impl BitcoindSettings {
         };
         let addr = bitcoind_config.addr.to_string();
         BitcoindSettings {
-            bitcoind_config,
-            edit: false,
             processing: false,
             rpc_auth_vals,
             selected_auth_type,
@@ -235,11 +269,8 @@ impl BitcoindSettings {
 }
 
 impl BitcoindSettings {
-    fn edited(&mut self, success: bool) {
+    fn edited(&mut self) {
         self.processing = false;
-        if success {
-            self.edit = false;
-        }
     }
 
     fn update(
@@ -249,16 +280,6 @@ impl BitcoindSettings {
         message: view::SettingsEditMessage,
     ) -> Task<Message> {
         match message {
-            view::SettingsEditMessage::Select => {
-                if !self.processing {
-                    self.edit = true;
-                }
-            }
-            view::SettingsEditMessage::Cancel => {
-                if !self.processing {
-                    self.edit = false;
-                }
-            }
             view::SettingsEditMessage::Node(DefineNode::DefineBitcoind(msg)) => {
                 if !self.processing {
                     match msg {
@@ -321,32 +342,21 @@ impl BitcoindSettings {
         Task::none()
     }
 
-    fn view<'a>(&self, cache: &'a Cache, can_edit: bool) -> Element<'a, view::SettingsEditMessage> {
-        if self.edit {
-            view::settings::bitcoind_edit(
-                cache.network,
-                cache.blockheight(),
-                &self.addr,
-                &self.rpc_auth_vals,
-                &self.selected_auth_type,
-                self.processing,
-            )
-        } else {
-            view::settings::node(
-                cache.network,
-                &BitcoinBackend::Bitcoind(self.bitcoind_config.clone()),
-                cache.blockheight(),
-                Some(cache.blockheight() != 0),
-                can_edit,
-            )
-        }
+    fn view<'a>(&self, cache: &'a Cache) -> Element<'a, view::SettingsEditMessage> {
+        view::settings::bitcoind_edit(
+            cache.network,
+            cache.blockheight(),
+            &self.addr,
+            &self.rpc_auth_vals,
+            &self.selected_auth_type,
+            self.processing,
+        )
     }
 }
 
 #[derive(Debug)]
 pub struct ElectrumSettings {
     electrum_config: ElectrumConfig,
-    edit: bool,
     processing: bool,
     addr: form::Value<String>,
 }
@@ -356,7 +366,6 @@ impl ElectrumSettings {
         let addr = electrum_config.addr.to_string();
         ElectrumSettings {
             electrum_config,
-            edit: false,
             processing: false,
             addr: form::Value {
                 valid: true,
@@ -368,11 +377,8 @@ impl ElectrumSettings {
 }
 
 impl ElectrumSettings {
-    fn edited(&mut self, success: bool) {
+    fn edited(&mut self) {
         self.processing = false;
-        if success {
-            self.edit = false;
-        }
     }
 
     fn update(
@@ -382,16 +388,6 @@ impl ElectrumSettings {
         message: view::SettingsEditMessage,
     ) -> Task<Message> {
         match message {
-            view::SettingsEditMessage::Select => {
-                if !self.processing {
-                    self.edit = true;
-                }
-            }
-            view::SettingsEditMessage::Cancel => {
-                if !self.processing {
-                    self.edit = false;
-                }
-            }
             view::SettingsEditMessage::Node(DefineNode::DefineElectrum(msg)) => {
                 if !self.processing {
                     match msg {
@@ -427,24 +423,14 @@ impl ElectrumSettings {
         Task::none()
     }
 
-    fn view<'a>(&self, cache: &'a Cache, can_edit: bool) -> Element<'a, view::SettingsEditMessage> {
-        if self.edit {
-            view::settings::electrum_edit(
-                cache.network,
-                cache.blockheight(),
-                &self.addr,
-                self.processing,
-                self.electrum_config.validate_domain,
-            )
-        } else {
-            view::settings::node(
-                cache.network,
-                &BitcoinBackend::Electrum(self.electrum_config.clone()),
-                cache.blockheight(),
-                Some(cache.blockheight() != 0),
-                can_edit,
-            )
-        }
+    fn view<'a>(&self, cache: &'a Cache) -> Element<'a, view::SettingsEditMessage> {
+        view::settings::electrum_edit(
+            cache.network,
+            cache.blockheight(),
+            &self.addr,
+            self.processing,
+            self.electrum_config.validate_domain,
+        )
     }
 }
 
