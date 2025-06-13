@@ -34,18 +34,14 @@ pub struct NodeSettingsState {
     warning: Option<Error>,
     config_updated: bool,
 
+    can_edit_node_settings: bool,
     bitcoind_settings: Option<BitcoindSettings>,
     electrum_settings: Option<ElectrumSettings>,
     rescan_settings: RescanSetting,
 }
 
 impl NodeSettingsState {
-    pub fn new(
-        config: Option<Config>,
-        cache: &Cache,
-        daemon_is_external: bool,
-        bitcoind_is_internal: bool,
-    ) -> Self {
+    pub fn new(config: Option<Config>, cache: &Cache, bitcoind_is_internal: bool) -> Self {
         let (bitcoind_config, electrum_config) =
             match config.clone().and_then(|c| c.bitcoin_backend) {
                 Some(BitcoinBackend::Bitcoind(bitcoind_config)) => (Some(bitcoind_config), None),
@@ -55,11 +51,10 @@ impl NodeSettingsState {
         NodeSettingsState {
             warning: None,
             config_updated: false,
-            bitcoind_settings: bitcoind_config.map(|bitcoind_config| {
-                BitcoindSettings::new(bitcoind_config, daemon_is_external, bitcoind_is_internal)
-            }),
-            electrum_settings: electrum_config
-                .map(|electrum_config| ElectrumSettings::new(electrum_config, daemon_is_external)),
+            can_edit_node_settings: (bitcoind_config.is_some() || electrum_config.is_some())
+                && !bitcoind_is_internal,
+            bitcoind_settings: bitcoind_config.map(BitcoindSettings::new),
+            electrum_settings: electrum_config.map(ElectrumSettings::new),
             rescan_settings: RescanSetting::new(cache.rescan_progress()),
         }
     }
@@ -137,10 +132,7 @@ impl State for NodeSettingsState {
     }
 
     fn view<'a>(&'a self, cache: &'a Cache) -> Element<'a, view::Message> {
-        let can_edit_bitcoind_settings =
-            self.bitcoind_settings.is_some() && !self.rescan_settings.processing;
-        let can_edit_electrum_settings =
-            self.electrum_settings.is_some() && !self.rescan_settings.processing;
+        let can_edit = self.can_edit_node_settings && !self.rescan_settings.processing;
         let settings_edit = self
             .bitcoind_settings
             .as_ref()
@@ -155,14 +147,14 @@ impl State for NodeSettingsState {
         let mut setting_panels = Vec::new();
         if self.bitcoind_settings.is_some() || self.electrum_settings.is_some() {
             if let Some(settings) = self.bitcoind_settings.as_ref() {
-                setting_panels.push(settings.view(cache, can_edit_bitcoind_settings).map(
-                    move |msg| view::Message::Settings(view::SettingsMessage::NodeSettings(msg)),
-                ))
+                setting_panels.push(settings.view(cache, can_edit).map(move |msg| {
+                    view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
+                }))
             }
             if let Some(settings) = self.electrum_settings.as_ref() {
-                setting_panels.push(settings.view(cache, can_edit_electrum_settings).map(
-                    move |msg| view::Message::Settings(view::SettingsMessage::NodeSettings(msg)),
-                ))
+                setting_panels.push(settings.view(cache, can_edit).map(move |msg| {
+                    view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
+                }))
             }
             setting_panels.push(view::settings::link(
                 help::CHANGE_BACKEND_OR_NODE_URL,
@@ -192,16 +184,10 @@ pub struct BitcoindSettings {
     rpc_auth_vals: RpcAuthValues,
     selected_auth_type: RpcAuthType,
     addr: form::Value<String>,
-    daemon_is_external: bool,
-    bitcoind_is_internal: bool,
 }
 
 impl BitcoindSettings {
-    fn new(
-        bitcoind_config: BitcoindConfig,
-        daemon_is_external: bool,
-        bitcoind_is_internal: bool,
-    ) -> BitcoindSettings {
+    fn new(bitcoind_config: BitcoindConfig) -> BitcoindSettings {
         let (rpc_auth_vals, selected_auth_type) = match &bitcoind_config.rpc_auth {
             BitcoindRpcAuth::CookieFile(path) => (
                 RpcAuthValues {
@@ -234,8 +220,6 @@ impl BitcoindSettings {
         };
         let addr = bitcoind_config.addr.to_string();
         BitcoindSettings {
-            daemon_is_external,
-            bitcoind_is_internal,
             bitcoind_config,
             edit: false,
             processing: false,
@@ -353,7 +337,7 @@ impl BitcoindSettings {
                 &BitcoinBackend::Bitcoind(self.bitcoind_config.clone()),
                 cache.blockheight(),
                 Some(cache.blockheight() != 0),
-                can_edit && !self.daemon_is_external && !self.bitcoind_is_internal,
+                can_edit,
             )
         }
     }
@@ -365,14 +349,12 @@ pub struct ElectrumSettings {
     edit: bool,
     processing: bool,
     addr: form::Value<String>,
-    daemon_is_external: bool,
 }
 
 impl ElectrumSettings {
-    fn new(electrum_config: ElectrumConfig, daemon_is_external: bool) -> ElectrumSettings {
+    fn new(electrum_config: ElectrumConfig) -> ElectrumSettings {
         let addr = electrum_config.addr.to_string();
         ElectrumSettings {
-            daemon_is_external,
             electrum_config,
             edit: false,
             processing: false,
@@ -460,7 +442,7 @@ impl ElectrumSettings {
                 &BitcoinBackend::Electrum(self.electrum_config.clone()),
                 cache.blockheight(),
                 Some(cache.blockheight() != 0),
-                can_edit && !self.daemon_is_external,
+                can_edit,
             )
         }
     }
