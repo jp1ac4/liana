@@ -40,6 +40,12 @@ use crate::{
     },
 };
 
+const AVAILABLE_NODE_TYPES: [NodeType; 2] = [
+    // This is the order in which the available node types will be shown to the user.
+    NodeType::Bitcoind,
+    NodeType::Electrum,
+];
+
 fn header(title: &str, msg: SettingsMessage) -> Row<'static, Message> {
     Row::new()
         .spacing(10)
@@ -376,6 +382,29 @@ fn node_info(network: Network, blockheight: i32) -> Row<'static, SettingsEditMes
         )
 }
 
+fn select_node_type<'a>(selected: NodeType) -> Row<'a, SettingsEditMessage> {
+    AVAILABLE_NODE_TYPES.iter().fold(
+        Row::new()
+            .push(text("Node type:").small().bold())
+            .spacing(10),
+        |row, node_type| {
+            row.push(radio(
+                match node_type {
+                    NodeType::Bitcoind => "Bitcoin Core",
+                    NodeType::Electrum => "Electrum",
+                },
+                node_type,
+                Some(&selected),
+                |new_selection| {
+                    SettingsEditMessage::Node(DefineNode::NodeTypeSelected(*new_selection))
+                },
+            ))
+            .spacing(30)
+            .align_y(Alignment::Center)
+        },
+    )
+}
+
 pub fn bitcoind_edit<'a>(
     network: Network,
     blockheight: i32,
@@ -392,6 +421,7 @@ pub fn bitcoind_edit<'a>(
     }
 
     col = col
+        .push(select_node_type(NodeType::Bitcoind))
         .push(
             [RpcAuthType::CookieFile, RpcAuthType::UserPass]
                 .iter()
@@ -650,7 +680,7 @@ pub fn electrum_edit<'a>(
             DefineElectrum::ValidDomainChanged(b),
         ))
     });
-    col = col.push(
+    col = col.push(select_node_type(NodeType::Electrum)).push(
         Column::new()
             .push(text("Address:").bold().small())
             .push(
