@@ -66,13 +66,8 @@ impl State for SettingsState {
         match &message {
             Message::View(view::Message::Settings(view::SettingsMessage::EditNodeSettings)) => {
                 self.setting = Some(
-                    NodeSettingsState::new(
-                        daemon.config().cloned(),
-                        cache,
-                        !daemon.backend().is_embedded(),
-                        self.internal_bitcoind,
-                    )
-                    .into(),
+                    NodeSettingsState::new(daemon.config().cloned(), cache, self.internal_bitcoind)
+                        .into(),
                 );
                 let wallet = self.wallet.clone();
                 self.setting
