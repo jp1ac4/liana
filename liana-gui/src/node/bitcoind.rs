@@ -654,6 +654,12 @@ pub enum RpcAuthType {
     UserPass,
 }
 
+impl Default for RpcAuthType {
+    fn default() -> Self {
+        Self::CookieFile
+    }
+}
+
 impl fmt::Display for RpcAuthType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

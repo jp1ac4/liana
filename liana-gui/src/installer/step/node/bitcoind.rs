@@ -338,7 +338,7 @@ impl Step for SelectBitcoindTypeStep {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct DefineBitcoind {
     rpc_auth_vals: RpcAuthValues,
     selected_auth_type: RpcAuthType,
@@ -350,12 +350,7 @@ pub struct DefineBitcoind {
 
 impl DefineBitcoind {
     pub fn new() -> Self {
-        Self {
-            rpc_auth_vals: RpcAuthValues::default(),
-            selected_auth_type: RpcAuthType::CookieFile,
-            address: form::Value::default(),
-            network: None,
-        }
+        Self::default()
     }
 
     pub fn ping(&self) -> Result<(), Error> {
@@ -483,12 +478,6 @@ impl DefineBitcoind {
 
     pub fn view(&self) -> Element<Message> {
         view::define_bitcoind(&self.address, &self.rpc_auth_vals, &self.selected_auth_type)
-    }
-}
-
-impl Default for DefineBitcoind {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
