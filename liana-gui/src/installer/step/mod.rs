@@ -7,7 +7,7 @@ mod share_xpubs;
 mod wallet_alias;
 
 pub use node::{
-    bitcoind::{DownloadState, InstallState, InternalBitcoindStep, SelectBitcoindTypeStep},
+    bitcoind::{InstallState, InternalBitcoindStep, SelectBitcoindTypeStep},
     DefineNode,
 };
 
