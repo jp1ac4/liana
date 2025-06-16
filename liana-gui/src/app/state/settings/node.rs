@@ -192,19 +192,33 @@ impl State for NodeSettingsState {
                     }),
                 );
             } else {
+                let available_node_types = match backend_config {
+                    BitcoinBackend::Bitcoind(_) => {
+                        vec![NodeType::Bitcoind, NodeType::Electrum]
+                    }
+                    BitcoinBackend::Electrum(_) => vec![NodeType::Electrum],
+                };
                 match self.selected_node_type {
                     Some(NodeType::Bitcoind) => {
                         if let Some(settings) = self.bitcoind_settings.as_ref() {
-                            setting_panels.push(settings.view(cache).map(move |msg| {
-                                view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
-                            }));
+                            setting_panels.push(settings.view(cache, &available_node_types).map(
+                                move |msg| {
+                                    view::Message::Settings(view::SettingsMessage::NodeSettings(
+                                        msg,
+                                    ))
+                                },
+                            ));
                         }
                     }
                     Some(NodeType::Electrum) => {
                         if let Some(settings) = self.electrum_settings.as_ref() {
-                            setting_panels.push(settings.view(cache).map(move |msg| {
-                                view::Message::Settings(view::SettingsMessage::NodeSettings(msg))
-                            }));
+                            setting_panels.push(settings.view(cache, &available_node_types).map(
+                                move |msg| {
+                                    view::Message::Settings(view::SettingsMessage::NodeSettings(
+                                        msg,
+                                    ))
+                                },
+                            ));
                         }
                     }
                     None => {
@@ -354,7 +368,11 @@ impl BitcoindSettings {
         Task::none()
     }
 
-    fn view<'a>(&self, cache: &'a Cache) -> Element<'a, view::SettingsEditMessage> {
+    fn view<'a>(
+        &self,
+        cache: &'a Cache,
+        available_node_types: &[NodeType],
+    ) -> Element<'a, view::SettingsEditMessage> {
         view::settings::bitcoind_edit(
             cache.network,
             cache.blockheight,
@@ -362,6 +380,7 @@ impl BitcoindSettings {
             &self.rpc_auth_vals,
             &self.selected_auth_type,
             self.processing,
+            available_node_types,
         )
     }
 }
@@ -444,13 +463,18 @@ impl ElectrumSettings {
         Task::none()
     }
 
-    fn view<'a>(&self, cache: &'a Cache) -> Element<'a, view::SettingsEditMessage> {
+    fn view<'a>(
+        &self,
+        cache: &'a Cache,
+        available_node_types: &[NodeType],
+    ) -> Element<'a, view::SettingsEditMessage> {
         view::settings::electrum_edit(
             cache.network,
             cache.blockheight,
             &self.addr,
             self.processing,
             self.validate_domain,
+            available_node_types,
         )
     }
 }
