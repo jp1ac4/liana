@@ -80,3 +80,79 @@ impl From<reqwest::Error> for DownloadError {
         DownloadError::RequestFailed(Arc::new(error))
     }
 }
+
+// The approach for tracking download progress is taken from
+// https://github.com/iced-rs/iced/blob/master/examples/download_progress/src/main.rs.
+#[derive(Debug)]
+pub struct Download {
+    id: usize,
+    state: DownloadState,
+}
+
+impl Download {
+    pub fn state(&self) -> &DownloadState {
+        &self.state
+    }
+
+    pub fn finished_content(&self) -> Option<&[u8]> {
+        if let DownloadState::Finished(bytes) = &self.state {
+            Some(bytes)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum DownloadState {
+    Idle,
+    Downloading { progress: f32 },
+    Finished(Vec<u8>),
+    Errored(DownloadError),
+}
+
+impl Download {
+    pub fn new(id: usize) -> Self {
+        Download {
+            id,
+            state: DownloadState::Idle,
+        }
+    }
+
+    pub fn start(&mut self) {
+        match self.state {
+            DownloadState::Idle { .. }
+            | DownloadState::Finished { .. }
+            | DownloadState::Errored { .. } => {
+                self.state = DownloadState::Downloading { progress: 0.0 };
+            }
+            _ => {}
+        }
+    }
+
+    pub fn progress(&mut self, new_progress: Result<Progress, DownloadError>) {
+        if let DownloadState::Downloading { progress } = &mut self.state {
+            match new_progress {
+                Ok(Progress::Downloading(percentage)) => {
+                    *progress = percentage;
+                }
+                Ok(Progress::Finished(bytes)) => {
+                    self.state = DownloadState::Finished(bytes);
+                }
+                Err(e) => {
+                    self.state = DownloadState::Errored(e);
+                }
+            }
+        }
+    }
+
+    // pub fn subscription<U: ToString, M: Clone + Send + Sync>(&self, url: U, message: M) -> Subscription<M> {
+    //     match self.state {
+    //         DownloadState::Downloading { .. } => file(self.id, url)
+    //             .map(|(_, progress)| {
+    //                 message
+    //             }),
+    //         _ => Subscription::none(),
+    //     }
+    // }
+}

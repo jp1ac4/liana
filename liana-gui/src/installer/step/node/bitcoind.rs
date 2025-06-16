@@ -20,7 +20,7 @@ use liana_ui::{component::form, widget::*};
 
 use crate::dir::LianaDirectory;
 use crate::{
-    download,
+    download::{self, Download, DownloadState},
     hw::HardwareWallets,
     installer::{
         context::Context,
@@ -38,67 +38,67 @@ use crate::{
 
 // The approach for tracking download progress is taken from
 // https://github.com/iced-rs/iced/blob/master/examples/download_progress/src/main.rs.
-#[derive(Debug)]
-struct Download {
-    id: usize,
-    state: DownloadState,
-}
+// #[derive(Debug)]
+// struct Download {
+//     id: usize,
+//     state: DownloadState,
+// }
 
-#[derive(Debug)]
-pub enum DownloadState {
-    Idle,
-    Downloading { progress: f32 },
-    Finished(Vec<u8>),
-    Errored(download::DownloadError),
-}
+// #[derive(Debug)]
+// pub enum DownloadState {
+//     Idle,
+//     Downloading { progress: f32 },
+//     Finished(Vec<u8>),
+//     Errored(download::DownloadError),
+// }
 
-impl Download {
-    pub fn new(id: usize) -> Self {
-        Download {
-            id,
-            state: DownloadState::Idle,
-        }
-    }
+// impl Download {
+//     pub fn new(id: usize) -> Self {
+//         Download {
+//             id,
+//             state: DownloadState::Idle,
+//         }
+//     }
 
-    pub fn start(&mut self) {
-        match self.state {
-            DownloadState::Idle { .. }
-            | DownloadState::Finished { .. }
-            | DownloadState::Errored { .. } => {
-                self.state = DownloadState::Downloading { progress: 0.0 };
-            }
-            _ => {}
-        }
-    }
+//     pub fn start(&mut self) {
+//         match self.state {
+//             DownloadState::Idle { .. }
+//             | DownloadState::Finished { .. }
+//             | DownloadState::Errored { .. } => {
+//                 self.state = DownloadState::Downloading { progress: 0.0 };
+//             }
+//             _ => {}
+//         }
+//     }
 
-    pub fn progress(&mut self, new_progress: Result<download::Progress, download::DownloadError>) {
-        if let DownloadState::Downloading { progress } = &mut self.state {
-            match new_progress {
-                Ok(download::Progress::Downloading(percentage)) => {
-                    *progress = percentage;
-                }
-                Ok(download::Progress::Finished(bytes)) => {
-                    self.state = DownloadState::Finished(bytes);
-                }
-                Err(e) => {
-                    self.state = DownloadState::Errored(e);
-                }
-            }
-        }
-    }
+//     pub fn progress(&mut self, new_progress: Result<download::Progress, download::DownloadError>) {
+//         if let DownloadState::Downloading { progress } = &mut self.state {
+//             match new_progress {
+//                 Ok(download::Progress::Downloading(percentage)) => {
+//                     *progress = percentage;
+//                 }
+//                 Ok(download::Progress::Finished(bytes)) => {
+//                     self.state = DownloadState::Finished(bytes);
+//                 }
+//                 Err(e) => {
+//                     self.state = DownloadState::Errored(e);
+//                 }
+//             }
+//         }
+//     }
 
-    pub fn subscription(&self) -> Subscription<Message> {
-        match self.state {
-            DownloadState::Downloading { .. } => download::file(self.id, bitcoind::download_url())
-                .map(|(_, progress)| {
-                    Message::InternalBitcoind(message::InternalBitcoindMsg::DownloadProgressed(
-                        progress,
-                    ))
-                }),
-            _ => Subscription::none(),
-        }
-    }
-}
+//     pub fn subscription(&self) -> Subscription<Message> {
+//         match self.state {
+//             DownloadState::Downloading { .. } => download::file(self.id, bitcoind::download_url())
+//                 .map(|(_, progress)| {
+//                     Message::InternalBitcoind(message::InternalBitcoindMsg::DownloadProgressed(
+//                         progress,
+//                     ))
+//                 }),
+//             _ => Subscription::none(),
+//         }
+//     }
+// }
 
 /// Default prune value used by internal bitcoind.
 pub const PRUNE_DEFAULT: u32 = 15_000;
@@ -498,7 +498,7 @@ pub struct InternalBitcoindStep {
     bitcoind_config: Option<BitcoindConfig>,
     internal_bitcoind_config: Option<InternalBitcoindConfig>,
     error: Option<String>,
-    exe_download: Option<Download>,
+    exe_download: Option<download::Download>,
     install_state: Option<InstallState>,
     internal_bitcoind: Option<Bitcoind>,
 }
@@ -559,7 +559,7 @@ impl Step for InternalBitcoindStep {
                     }
                     if let Some(download) = self.exe_download.as_ref() {
                         // Clear exe_download if not Finished.
-                        if let DownloadState::Finished { .. } = download.state {
+                        if download.is_finished() {
                         } else {
                             self.exe_download = None;
                         }
@@ -658,7 +658,7 @@ impl Step for InternalBitcoindStep {
                 message::InternalBitcoindMsg::DownloadProgressed(progress) => {
                     if let Some(download) = self.exe_download.as_mut() {
                         download.progress(progress);
-                        if let DownloadState::Finished(_) = &download.state {
+                        if download.is_finished() {
                             info!("Download of bitcoind complete.");
                             return Task::perform(async {}, |_| {
                                 Message::InternalBitcoind(message::InternalBitcoindMsg::Install)
@@ -668,7 +668,7 @@ impl Step for InternalBitcoindStep {
                 }
                 message::InternalBitcoindMsg::Install => {
                     if let Some(download) = &self.exe_download {
-                        if let DownloadState::Finished(bytes) = &download.state {
+                        if let Some(bytes) = download.content() {
                             info!("Installing bitcoind...");
                             self.install_state = Some(InstallState::InProgress);
                             match install_bitcoind(
