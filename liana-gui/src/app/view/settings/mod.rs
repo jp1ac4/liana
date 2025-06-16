@@ -43,12 +43,6 @@ use crate::{
     },
 };
 
-const AVAILABLE_NODE_TYPES: [NodeType; 2] = [
-    // This is the order in which the available node types will be shown to the user.
-    NodeType::Bitcoind,
-    NodeType::Electrum,
-];
-
 fn header(title: &str, msg: SettingsMessage) -> Row<'static, Message> {
     Row::new()
         .spacing(10)
@@ -412,26 +406,31 @@ fn node_info(network: Network, blockheight: i32) -> Row<'static, SettingsEditMes
         )
 }
 
-fn select_node_type<'a>(selected: NodeType) -> Row<'a, SettingsEditMessage> {
-    AVAILABLE_NODE_TYPES.iter().fold(
-        Row::new()
-            .push(text("Node type:").small().bold())
-            .spacing(10),
-        |row, node_type| {
-            row.push(radio(
-                match node_type {
-                    NodeType::Bitcoind => "Bitcoin Core",
-                    NodeType::Electrum => "Electrum",
-                },
-                node_type,
-                Some(&selected),
-                |new_selection| {
-                    SettingsEditMessage::Node(DefineNode::NodeTypeSelected(*new_selection))
-                },
-            ))
-            .spacing(30)
-            .align_y(Alignment::Center)
-        },
+fn select_node_type<'a>(
+    available: &[NodeType],
+    selected: NodeType,
+) -> Option<Row<'a, SettingsEditMessage>> {
+    (available.len() > 1).then_some(
+        available.iter().fold(
+            Row::new()
+                .push(text("Node type:").small().bold())
+                .spacing(10),
+            |row, node_type| {
+                row.push(radio(
+                    match node_type {
+                        NodeType::Bitcoind => "Bitcoin Core",
+                        NodeType::Electrum => "Electrum",
+                    },
+                    node_type,
+                    Some(&selected),
+                    |new_selection| {
+                        SettingsEditMessage::Node(DefineNode::NodeTypeSelected(*new_selection))
+                    },
+                ))
+                .spacing(30)
+                .align_y(Alignment::Center)
+            },
+        ),
     )
 }
 
@@ -442,6 +441,7 @@ pub fn bitcoind_edit<'a>(
     rpc_auth_vals: &RpcAuthValues,
     selected_auth_type: &RpcAuthType,
     processing: bool,
+    available_node_types: &[NodeType],
 ) -> Element<'a, SettingsEditMessage> {
     let mut col = Column::new().spacing(20);
     if blockheight != 0 {
@@ -451,7 +451,7 @@ pub fn bitcoind_edit<'a>(
     }
 
     col = col
-        .push(select_node_type(NodeType::Bitcoind))
+        .push_maybe(select_node_type(available_node_types, NodeType::Bitcoind))
         .push(
             [RpcAuthType::CookieFile, RpcAuthType::UserPass]
                 .iter()
@@ -697,6 +697,7 @@ pub fn electrum_edit<'a>(
     addr: &form::Value<String>,
     processing: bool,
     validate_domain: bool,
+    available_node_types: &[NodeType],
 ) -> Element<'a, SettingsEditMessage> {
     let mut col = Column::new().spacing(20);
     if blockheight != 0 {
@@ -710,23 +711,28 @@ pub fn electrum_edit<'a>(
             DefineElectrum::ValidDomainChanged(b),
         ))
     });
-    col = col.push(select_node_type(NodeType::Electrum)).push(
-        Column::new()
-            .push(text("Address:").bold().small())
-            .push(
-                form::Form::new_trimmed("127:0.0.1:50001", addr, |value| {
-                    SettingsEditMessage::Node(DefineNode::DefineElectrum(
-                        DefineElectrum::ConfigFieldEdited(electrum::ConfigField::Address, value),
-                    ))
-                })
-                .warning("Please enter a valid address")
-                .size(P1_SIZE)
-                .padding(5),
-            )
-            .push_maybe(checkbox)
-            .push(text(electrum::ADDRESS_NOTES).size(P2_SIZE))
-            .spacing(5),
-    );
+    col = col
+        .push_maybe(select_node_type(available_node_types, NodeType::Electrum))
+        .push(
+            Column::new()
+                .push(text("Address:").bold().small())
+                .push(
+                    form::Form::new_trimmed("127:0.0.1:50001", addr, |value| {
+                        SettingsEditMessage::Node(DefineNode::DefineElectrum(
+                            DefineElectrum::ConfigFieldEdited(
+                                electrum::ConfigField::Address,
+                                value,
+                            ),
+                        ))
+                    })
+                    .warning("Please enter a valid address")
+                    .size(P1_SIZE)
+                    .padding(5),
+                )
+                .push_maybe(checkbox)
+                .push(text(electrum::ADDRESS_NOTES).size(P2_SIZE))
+                .spacing(5),
+        );
 
     let mut cancel_button = button::transparent(None, " Cancel ").padding(5);
     let mut confirm_button = button::secondary(None, " Save ").padding(5);
