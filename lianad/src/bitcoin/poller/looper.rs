@@ -6,7 +6,7 @@ use crate::{
 use std::{collections::HashSet, convert::TryInto, sync, thread, time};
 
 use liana::descriptors;
-use miniscript::bitcoin::{self, secp256k1};
+use miniscript::bitcoin::{self, bip32::ChildNumber, secp256k1};
 
 #[derive(Debug, Clone)]
 struct UpdatedCoins {
@@ -16,6 +16,20 @@ struct UpdatedCoins {
     pub spending: Vec<(bitcoin::OutPoint, bitcoin::Txid)>,
     pub expired_spending: Vec<bitcoin::OutPoint>,
     pub spent: Vec<(bitcoin::OutPoint, bitcoin::Txid, i32, u32)>,
+}
+
+fn coin_from_utxo(utxo: &UTxO, derivation_index: ChildNumber, is_change: bool) -> Coin {
+    Coin {
+        outpoint: utxo.outpoint,
+        is_immature: utxo.is_immature,
+        amount: utxo.amount,
+        derivation_index,
+        is_change,
+        block_info: None,
+        spend_txid: None,
+        spend_block: None,
+        is_from_self: false,
+    }
 }
 
 // Update the state of our coins. There may be new unspent, and existing ones may become confirmed
@@ -37,18 +51,17 @@ fn update_coins(
 
     // Start by fetching newly received coins.
     let mut received = Vec::new();
-    for (utxo, address) in bit.received_coins(previous_tip, descs) {
+
+    // Keep track of those coins with an unknown derivation index for further processing below.
+    let mut utxos_without_index = Vec::<(UTxO, bitcoin::Address)>::new();
+    // For those coins with a known derivation index, store the max values.
+    let mut max_receive_index = Option::<ChildNumber>::None;
+    let mut max_change_index = Option::<ChildNumber>::None;
+    for (utxo, utxo_addr) in bit.received_coins(previous_tip, descs) {
         if curr_coins.contains_key(&utxo.outpoint) {
             continue;
         }
-        let UTxO {
-            outpoint,
-            amount,
-            is_immature,
-            ..
-        } = utxo;
-        // We can only really treat them if we know the derivation index that was used.
-        let (derivation_index, is_change) = match address {
+        match utxo_addr {
             UTxOAddress::Address(address) => {
                 let address = match address.require_network(network) {
                     Ok(addr) => addr,
@@ -57,24 +70,45 @@ fn update_coins(
                         continue;
                     }
                 };
-                if let Some((derivation_index, is_change)) =
-                    db_conn.derivation_index_by_address(&address)
-                {
-                    (derivation_index, is_change)
-                } else {
-                    // TODO: maybe we could try out something here? Like bruteforcing the next 200 indexes?
-                    log::error!(
-                        "Could not get derivation index for coin '{}' (address: '{}')",
-                        &utxo.outpoint,
-                        &address
-                    );
-                    continue;
-                }
+                utxos_without_index.push((utxo, address));
             }
-            UTxOAddress::DerivIndex(index, is_change) => (index, is_change),
+            UTxOAddress::DerivIndex(derivation_index, is_change) => {
+                if !is_change {
+                    max_receive_index = max_receive_index.max(Some(derivation_index));
+                } else {
+                    max_change_index = max_change_index.max(Some(derivation_index));
+                }
+                received.push(coin_from_utxo(&utxo, derivation_index, is_change));
+            }
+        }
+    }
+    // Update DB last used index values if they have increased.
+    if let Some(index) = max_receive_index.filter(|ind| *ind > db_conn.receive_index()) {
+        db_conn.set_receive_index(index, secp);
+    }
+    if let Some(index) = max_change_index.filter(|ind| *ind > db_conn.change_index()) {
+        db_conn.set_change_index(index, secp);
+    }
+
+    // For new coin addresses, look up their derivation indices in the DB. To increase the chance of the lookup finding
+    // a match, the coins are sorted in order of confirmation block height followed by unconfirmed coins.
+    // This is because we expect the block height to be correlated to derivation index and we want to start with lower
+    // derivation indices and derive more DB addresses as we progress.
+    utxos_without_index.sort_by_key(|(utxo, _)| utxo.block_height.unwrap_or(i32::MAX));
+    for (utxo, address) in utxos_without_index {
+        let (derivation_index, is_change) = if let Some((derivation_index, is_change)) =
+            db_conn.derivation_index_by_address(&address)
+        {
+            (derivation_index, is_change)
+        } else {
+            // TODO: maybe we could try out something here? Like bruteforcing the next 200 indexes?
+            log::error!(
+                "Could not get derivation index for coin '{}' (address: '{}')",
+                &utxo.outpoint,
+                &address
+            );
+            continue;
         };
-        // First of if we are receiving coins that are beyond our next derivation index,
-        // adjust it.
         if !is_change && derivation_index > db_conn.receive_index() {
             db_conn.set_receive_index(derivation_index, secp);
         } else if is_change && derivation_index > db_conn.change_index() {
@@ -82,18 +116,7 @@ fn update_coins(
         }
 
         // Now record this coin as a newly received one.
-        let coin = Coin {
-            outpoint,
-            is_immature,
-            amount,
-            derivation_index,
-            is_change,
-            block_info: None,
-            spend_txid: None,
-            spend_block: None,
-            is_from_self: false,
-        };
-        received.push(coin);
+        received.push(coin_from_utxo(&utxo, derivation_index, is_change));
     }
     log::debug!("Newly received coins: {:?}", received);
 
