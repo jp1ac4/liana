@@ -3,7 +3,11 @@ use crate::{
     database::{Coin, DatabaseConnection, DatabaseInterface},
 };
 
-use std::{collections::HashSet, convert::TryInto, sync, thread, time};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::TryInto,
+    sync, thread, time,
+};
 
 use liana::descriptors;
 use miniscript::bitcoin::{self, bip32::ChildNumber, secp256k1};
@@ -53,12 +57,18 @@ fn update_coins(
 
     // Start by fetching newly received coins.
     let mut received = Vec::new();
-    for (utxo, address) in bit.received_coins(previous_tip, descs) {
+
+    // Keep track of those coins with an unknown derivation index for further processing below.
+    // Note that two UTXOs may share the same address.
+    let mut address_lookup_queue = Vec::<(UTxO, bitcoin::Address)>::new();
+    // For those new coins with a known derivation index, keep track of the max values as we go and then update DB once.
+    let mut utxo_max_indices = HashMap::</* is_change */ bool, ChildNumber>::new();
+
+    for (utxo, utxo_addr) in bit.received_coins(previous_tip, descs) {
         if curr_coins.contains_key(&utxo.outpoint) {
             continue;
         }
-        // We can only really treat them if we know the derivation index that was used.
-        let (derivation_index, is_change) = match address {
+        match utxo_addr {
             UTxOAddress::Address(address) => {
                 let address = match address.require_network(network) {
                     Ok(addr) => addr,
@@ -67,28 +77,62 @@ fn update_coins(
                         continue;
                     }
                 };
-                if let Some((derivation_index, is_change)) =
-                    db_conn.derivation_index_by_address(&address)
-                {
-                    (derivation_index, is_change)
-                } else {
-                    // TODO: maybe we could try out something here? Like bruteforcing the next 200 indexes?
-                    log::error!(
-                        "Could not get derivation index for coin '{}' (address: '{}')",
-                        &utxo.outpoint,
-                        &address
-                    );
-                    continue;
-                }
+                address_lookup_queue.push((utxo, address));
             }
-            UTxOAddress::DerivIndex(index, is_change) => (index, is_change),
+            UTxOAddress::DerivIndex(derivation_index, is_change) => {
+                utxo_max_indices
+                    .entry(is_change)
+                    .and_modify(|max_idx| *max_idx = (*max_idx).max(derivation_index))
+                    .or_insert(derivation_index);
+
+                received.push(received_coin_from_utxo(utxo, derivation_index, is_change));
+            }
+        }
+    }
+    // Update DB last used index values if they have increased.
+    for (is_change, utxo_index) in utxo_max_indices.into_iter() {
+        if !is_change && utxo_index > db_conn.receive_index() {
+            db_conn.set_receive_index(utxo_index, secp);
+        } else if is_change && utxo_index > db_conn.change_index() {
+            db_conn.set_change_index(utxo_index, secp);
+        }
+    }
+
+    // Now process the UTXOs that need an address lookup.
+    let mut db_last_used_indices = HashMap::</* is_change */ bool, ChildNumber>::new();
+    for (utxo, address) in address_lookup_queue {
+        // We can only really treat them if we know the derivation index that was used.
+        let (derivation_index, is_change) = if let Some((derivation_index, is_change)) =
+            db_conn.derivation_index_by_address(&address)
+        {
+            (derivation_index, is_change)
+        } else {
+            // TODO: maybe we could try out something here? Like bruteforcing the next 200 indexes?
+            log::error!(
+                "Could not get derivation index for coin '{}' (address: '{}')",
+                &utxo.outpoint,
+                &address
+            );
+            continue;
         };
-        // First of if we are receiving coins that are beyond our next derivation index,
-        // adjust it.
-        if !is_change && derivation_index > db_conn.receive_index() {
-            db_conn.set_receive_index(derivation_index, secp);
-        } else if is_change && derivation_index > db_conn.change_index() {
-            db_conn.set_change_index(derivation_index, secp);
+        // Use `or_insert_with` to avoid doing the DB lookup if we already have it.
+        let last_used_index = db_last_used_indices.entry(is_change).or_insert_with(|| {
+            if !is_change {
+                db_conn.receive_index()
+            } else {
+                db_conn.change_index()
+            }
+        });
+
+        // Update the DB index after each coin to advance the DB lookahead addresses and increase the chance
+        // of a match for subsequent address lookups.
+        if derivation_index > *last_used_index {
+            *last_used_index = derivation_index; // updates the corresponding receive/change HashMap entry
+            if !is_change {
+                db_conn.set_receive_index(derivation_index, secp);
+            } else {
+                db_conn.set_change_index(derivation_index, secp);
+            }
         }
 
         // Now record this coin as a newly received one.
