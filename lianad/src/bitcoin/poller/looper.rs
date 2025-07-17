@@ -38,6 +38,9 @@ fn update_coins(
     // Start by fetching newly received coins.
     let mut received = Vec::new();
     for (utxo, address) in bit.received_coins(previous_tip, descs) {
+        if curr_coins.contains_key(&utxo.outpoint) {
+            continue;
+        }
         let UTxO {
             outpoint,
             amount,
@@ -79,20 +82,18 @@ fn update_coins(
         }
 
         // Now record this coin as a newly received one.
-        if !curr_coins.contains_key(&utxo.outpoint) {
-            let coin = Coin {
-                outpoint,
-                is_immature,
-                amount,
-                derivation_index,
-                is_change,
-                block_info: None,
-                spend_txid: None,
-                spend_block: None,
-                is_from_self: false,
-            };
-            received.push(coin);
-        }
+        let coin = Coin {
+            outpoint,
+            is_immature,
+            amount,
+            derivation_index,
+            is_change,
+            block_info: None,
+            spend_txid: None,
+            spend_block: None,
+            is_from_self: false,
+        };
+        received.push(coin);
     }
     log::debug!("Newly received coins: {:?}", received);
 
