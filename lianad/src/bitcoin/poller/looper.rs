@@ -37,11 +37,10 @@ fn update_coins(
 
     // Start by fetching newly received coins.
     let mut received = Vec::new();
-    for utxo in bit.received_coins(previous_tip, descs) {
+    for (utxo, address) in bit.received_coins(previous_tip, descs) {
         let UTxO {
             outpoint,
             amount,
-            address,
             is_immature,
             ..
         } = utxo;

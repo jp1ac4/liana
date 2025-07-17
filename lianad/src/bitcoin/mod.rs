@@ -76,7 +76,7 @@ pub trait BitcoinInterface: Send {
         &self,
         tip: &BlockChainTip,
         descs: &[descriptors::SinglePathLianaDesc],
-    ) -> Vec<UTxO>;
+    ) -> Vec<(UTxO, UTxOAddress)>;
 
     /// Get all coins that were confirmed, and at what height and time. Along with "expired"
     /// unconfirmed coins (for instance whose creating transaction may have been replaced).
@@ -180,7 +180,7 @@ impl BitcoinInterface for d::BitcoinD {
         &self,
         tip: &BlockChainTip,
         descs: &[descriptors::SinglePathLianaDesc],
-    ) -> Vec<UTxO> {
+    ) -> Vec<(UTxO, UTxOAddress)> {
         let lsb_res = self.list_since_block(&tip.hash);
 
         lsb_res
@@ -199,13 +199,15 @@ impl BitcoinInterface for d::BitcoinD {
                     .iter()
                     .any(|parent_desc| descs.iter().any(|desc| desc == parent_desc))
                 {
-                    Some(UTxO {
-                        outpoint,
-                        amount,
-                        block_height,
-                        address: UTxOAddress::Address(address),
-                        is_immature,
-                    })
+                    Some((
+                        UTxO {
+                            outpoint,
+                            amount,
+                            block_height,
+                            is_immature,
+                        },
+                        UTxOAddress::Address(address),
+                    ))
                 } else {
                     None
                 }
@@ -418,7 +420,7 @@ impl BitcoinInterface for electrum::Electrum {
         &self,
         tip: &BlockChainTip,
         _descs: &[descriptors::SinglePathLianaDesc],
-    ) -> Vec<UTxO> {
+    ) -> Vec<(UTxO, UTxOAddress)> {
         // Get those wallet coins that are either unconfirmed or have a confirmation height
         // after tip. The poller will then discard any that had already been received.
         self.wallet_coins(None)
@@ -428,13 +430,15 @@ impl BitcoinInterface for electrum::Electrum {
                 if height.filter(|h| *h <= tip.height).is_some() {
                     None
                 } else {
-                    Some(UTxO {
-                        outpoint: c.outpoint,
-                        block_height: height,
-                        amount: c.amount,
-                        address: UTxOAddress::DerivIndex(c.derivation_index, c.is_change),
-                        is_immature: c.is_immature,
-                    })
+                    Some((
+                        UTxO {
+                            outpoint: c.outpoint,
+                            block_height: height,
+                            amount: c.amount,
+                            is_immature: c.is_immature,
+                        },
+                        UTxOAddress::DerivIndex(c.derivation_index, c.is_change),
+                    ))
                 }
             })
             .collect()
@@ -627,7 +631,7 @@ impl BitcoinInterface for sync::Arc<sync::Mutex<dyn BitcoinInterface + 'static>>
         &self,
         tip: &BlockChainTip,
         descs: &[descriptors::SinglePathLianaDesc],
-    ) -> Vec<UTxO> {
+    ) -> Vec<(UTxO, UTxOAddress)> {
         self.lock().unwrap().received_coins(tip, descs)
     }
 
@@ -703,7 +707,6 @@ pub struct UTxO {
     pub outpoint: bitcoin::OutPoint,
     pub amount: bitcoin::Amount,
     pub block_height: Option<i32>,
-    pub address: UTxOAddress,
     pub is_immature: bool,
 }
 
