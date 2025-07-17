@@ -1,5 +1,7 @@
 use crate::{
-    bitcoin::{BitcoinInterface, Block, BlockChainTip, MempoolEntry, SyncProgress, UTxO},
+    bitcoin::{
+        BitcoinInterface, Block, BlockChainTip, MempoolEntry, SyncProgress, UTxO, UTxOAddress,
+    },
     config::{BitcoinConfig, Config},
     database::{
         BlockInfo, Coin, CoinStatus, DatabaseConnection, DatabaseInterface, LabelItem, Wallet,
@@ -80,7 +82,7 @@ impl BitcoinInterface for DummyBitcoind {
         &self,
         _: &BlockChainTip,
         _: &[descriptors::SinglePathLianaDesc],
-    ) -> Vec<UTxO> {
+    ) -> Vec<(UTxO, UTxOAddress)> {
         Vec::new()
     }
 
