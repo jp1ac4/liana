@@ -24,13 +24,17 @@ use std::sync::{Arc, Mutex};
 use crate::{
     app::{
         config as gui_config,
-        settings::{update_settings_file, AuthConfig, SettingsError, WalletId, WalletSettings},
+        settings::{
+            fiat::PriceSetting, update_settings_file, AuthConfig, SettingsError, WalletId,
+            WalletSettings,
+        },
         wallet::wallet_name,
     },
     backup,
     daemon::{Daemon, DaemonError},
     delete,
     dir::LianaDirectory,
+    fiat::currency,
     hw::{HardwareWalletConfig, HardwareWallets},
     services::{
         self,
@@ -425,6 +429,7 @@ pub async fn install_local_wallet(
         hardware_wallets,
         remote_backend_auth: None,
         start_internal_bitcoind: Some(ctx.internal_bitcoind.is_some()),
+        fiat_price: None,
     };
 
     let cfg: lianad::config::Config = extract_daemon_config(&ctx, &wallet_settings)?;
@@ -644,6 +649,12 @@ pub async fn create_remote_wallet(
             remote_backend.wallet_id(),
         )),
         start_internal_bitcoind: None,
+        // TODO: add default fiat price setting method
+        fiat_price: Some(PriceSetting {
+            is_enabled: true,
+            currency: currency::Currency::default(),
+            source: crate::fiat::source::PriceSource::CoinGecko,
+        }),
     };
     update_settings_file(&network_datadir, |mut settings| {
         settings.wallets.push(wallet_settings.clone());
@@ -723,6 +734,12 @@ pub async fn import_remote_wallet(
             backend.wallet_id(),
         )),
         start_internal_bitcoind: None,
+        // TODO: add default fiat price setting method
+        fiat_price: Some(PriceSetting {
+            is_enabled: true,
+            currency: currency::Currency::default(),
+            source: crate::fiat::source::PriceSource::CoinGecko,
+        }),
     };
     update_settings_file(&network_datadir, |mut settings| {
         settings.wallets.push(wallet_settings.clone());

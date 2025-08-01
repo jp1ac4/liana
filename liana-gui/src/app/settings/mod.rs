@@ -1,5 +1,7 @@
 //! Settings is the module to handle the GUI settings file.
 //! The settings file is used by the GUI to store useful information.
+pub mod fiat;
+
 use std::collections::HashMap;
 
 use async_fd_lock::LockWrite;
@@ -147,6 +149,7 @@ pub struct WalletSettings {
     /// Start internal bitcoind executable.
     /// if None, the app must refer to the gui.toml start_internal_bitcoind field.
     pub start_internal_bitcoind: Option<bool>,
+    pub fiat_price: Option<fiat::PriceSetting>,
 }
 
 impl WalletSettings {

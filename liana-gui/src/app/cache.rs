@@ -4,10 +4,13 @@ use crate::{
         Daemon, DaemonError,
     },
     dir::LianaDirectory,
+    fiat::{api::GetPriceResult, Currency, PriceSource},
 };
 use liana::miniscript::bitcoin::Network;
 use lianad::commands::CoinStatus;
 use std::sync::Arc;
+
+pub const FIAT_PRICE_UPDATE_INTERVAL_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct Cache {
@@ -16,6 +19,7 @@ pub struct Cache {
     /// The `last_poll_timestamp` when starting the application.
     pub last_poll_at_startup: Option<u32>,
     pub daemon_cache: DaemonCache,
+    pub fiat_price: Option<FiatPrice>,
 }
 
 /// only used for tests.
@@ -26,6 +30,7 @@ impl std::default::Default for Cache {
             network: Network::Bitcoin,
             last_poll_at_startup: None,
             daemon_cache: DaemonCache::default(),
+            fiat_price: None,
         }
     }
 }
@@ -83,4 +88,12 @@ pub async fn coins_to_cache(
     daemon
         .list_coins(&[CoinStatus::Unconfirmed, CoinStatus::Confirmed], &[])
         .await
+}
+
+#[derive(Debug, Clone)]
+pub struct FiatPrice {
+    pub res: GetPriceResult,
+    pub currency: Currency,
+    pub source: PriceSource,
+    pub requested_at: u64,
 }

@@ -447,6 +447,7 @@ pub async fn load_application(
             last_poll_timestamp: info.last_poll_timestamp,
             ..Default::default()
         },
+        fiat_price: None,
     };
 
     Ok((Arc::new(wallet), cache, daemon, internal_bitcoind, backup))
