@@ -31,7 +31,6 @@ use crate::{
     daemon::{Daemon, DaemonError},
     delete,
     dir::LianaDirectory,
-    fiat,
     hw::{HardwareWalletConfig, HardwareWallets},
     services::{
         self,
@@ -426,7 +425,7 @@ pub async fn install_local_wallet(
         hardware_wallets,
         remote_backend_auth: None,
         start_internal_bitcoind: Some(ctx.internal_bitcoind.is_some()),
-        fiat_currency: ctx.fiat_currency,
+        fiat_price: Some(ctx.fiat_price),
     };
 
     let cfg: lianad::config::Config = extract_daemon_config(&ctx, &wallet_settings)?;
@@ -646,7 +645,7 @@ pub async fn create_remote_wallet(
             remote_backend.wallet_id(),
         )),
         start_internal_bitcoind: None,
-        fiat_currency: Some(fiat::Currency::USD),
+        fiat_price: Some(ctx.fiat_price),
     };
     update_settings_file(&network_datadir, |mut settings| {
         settings.wallets.push(wallet_settings.clone());
@@ -726,7 +725,7 @@ pub async fn import_remote_wallet(
             backend.wallet_id(),
         )),
         start_internal_bitcoind: None,
-        fiat_currency: Some(fiat::Currency::USD),
+        fiat_price: Some(ctx.fiat_price),
     };
     update_settings_file(&network_datadir, |mut settings| {
         settings.wallets.push(wallet_settings.clone());

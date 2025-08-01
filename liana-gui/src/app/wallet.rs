@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use crate::dir::LianaDirectory;
 use crate::{
-    app::settings, daemon::DaemonBackend, hw::HardwareWalletConfig, node::NodeType, signer::Signer,
+    app::settings, daemon::DaemonBackend, fiat, hw::HardwareWalletConfig, node::NodeType,
+    signer::Signer,
 };
 
 use liana::{miniscript::bitcoin, signer::HotSigner};
@@ -41,6 +42,7 @@ pub struct Wallet {
     pub provider_keys: HashMap<Fingerprint, settings::ProviderKey>,
     pub hardware_wallets: Vec<HardwareWalletConfig>,
     pub signer: Option<Arc<Signer>>,
+    pub fiat_price_setting: Option<fiat::PriceSetting>,
 }
 
 impl Wallet {
@@ -60,6 +62,7 @@ impl Wallet {
             provider_keys: HashMap::new(),
             hardware_wallets: Vec::new(),
             signer: None,
+            fiat_price_setting: None,
         }
     }
 
@@ -106,6 +109,14 @@ impl Wallet {
         self
     }
 
+    pub fn with_fiat_price_setting(
+        mut self,
+        fiat_price_setting: Option<fiat::PriceSetting>,
+    ) -> Self {
+        self.fiat_price_setting = fiat_price_setting;
+        self
+    }
+
     pub fn descriptor_keys(&self) -> HashSet<Fingerprint> {
         let info = self.main_descriptor.policy();
         let mut descriptor_keys = HashSet::new();
@@ -130,7 +141,8 @@ impl Wallet {
                 .with_alias(wallet_settings.alias)
                 .with_name(wallet_settings.name)
                 .with_pinned_at(wallet_settings.pinned_at)
-                .with_hardware_wallets(wallet_settings.hardware_wallets))
+                .with_hardware_wallets(wallet_settings.hardware_wallets)
+                .with_fiat_price_setting(wallet_settings.fiat_price))
         }
     }
 

@@ -149,7 +149,7 @@ pub struct WalletSettings {
     /// if None, the app must refer to the gui.toml start_internal_bitcoind field.
     pub start_internal_bitcoind: Option<bool>,
     /// TODO
-    pub fiat_currency: Option<fiat::Currency>,
+    pub fiat_price: Option<fiat::PriceSetting>,
 }
 
 impl WalletSettings {

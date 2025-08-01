@@ -73,7 +73,7 @@ pub struct Context {
     pub remote_backend: RemoteBackend,
     pub backup: Option<Backup>,
     pub wallet_alias: String,
-    pub fiat_currency: Option<fiat::Currency>,
+    pub fiat_price: fiat::PriceSetting,
 }
 
 impl Context {
@@ -82,6 +82,10 @@ impl Context {
         liana_directory: LianaDirectory,
         remote_backend: RemoteBackend,
     ) -> Self {
+        let fiat_price = fiat::PriceSetting {
+            is_enabled: remote_backend.is_some(),
+            currency: fiat::Currency::default(),
+        };
         Self {
             descriptor_template: DescriptorTemplate::default(),
             bitcoin_config: BitcoinConfig {
@@ -102,7 +106,7 @@ impl Context {
             remote_backend,
             wallet_alias: String::new(),
             backup: None,
-            fiat_currency: None,
+            fiat_price,
         }
     }
 }
