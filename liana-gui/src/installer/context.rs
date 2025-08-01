@@ -6,6 +6,7 @@ use crate::{
     app::settings::KeySetting,
     backup::Backup,
     dir::LianaDirectory,
+    fiat,
     node::bitcoind::{Bitcoind, InternalBitcoindConfig},
     services::connect::client::backend::{BackendClient, BackendWalletClient},
     signer::Signer,
@@ -72,6 +73,7 @@ pub struct Context {
     pub remote_backend: RemoteBackend,
     pub backup: Option<Backup>,
     pub wallet_alias: String,
+    pub fiat_currency: Option<fiat::Currency>,
 }
 
 impl Context {
@@ -100,6 +102,7 @@ impl Context {
             remote_backend,
             wallet_alias: String::new(),
             backup: None,
+            fiat_currency: None,
         }
     }
 }

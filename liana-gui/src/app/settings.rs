@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     backup::{Key, KeyRole, KeyType},
     dir::NetworkDirectory,
+    fiat,
     hw::HardwareWalletConfig,
     services::{self, connect::client::backend},
 };
@@ -147,6 +148,8 @@ pub struct WalletSettings {
     /// Start internal bitcoind executable.
     /// if None, the app must refer to the gui.toml start_internal_bitcoind field.
     pub start_internal_bitcoind: Option<bool>,
+    /// TODO
+    pub fiat_currency: Option<fiat::Currency>,
 }
 
 impl WalletSettings {
