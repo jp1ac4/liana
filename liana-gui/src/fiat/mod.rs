@@ -51,7 +51,7 @@ impl PriceApi for PriceClient<reqwest::Client> {
     async fn get_price(&self, currency: Currency) -> Result<GetPriceResult, PriceApiError> {
         let url = match self.source {
             PriceSource::MempoolSpace => "https://mempool.space/api/v1/prices".to_string(),
-            PriceSource::CoinGecko => format!("https://api.coingecko.com/api/v3/simple/price?vs_currencies={}&include_last_updated_at=true", currency),
+            PriceSource::CoinGecko => format!("https://api.coingecko.com/api/v3/simple/price?symbols=btc&vs_currencies={}&include_last_updated_at=true", currency),
         };
         let data = get_data(&self.inner, &url).await?;
         let (value, timestamp) = match self.source {
@@ -65,12 +65,13 @@ impl PriceApi for PriceClient<reqwest::Client> {
                 (value, timestamp)
             }
             PriceSource::CoinGecko => {
-                let value = data
-                    .get(currency.to_string())
+                let btc = data.get("btc").ok_or(PriceApiError::CurrencyNotFound)?;
+                let value = btc
+                    .get(currency.to_string().to_lowercase())
                     .ok_or(PriceApiError::CurrencyNotFound)?
                     .as_u64()
                     .ok_or(PriceApiError::CannotParsePrice)?;
-                let timestamp = data.get("timestamp").and_then(|t| t.as_u64());
+                let timestamp = btc.get("last_updated_at").and_then(|t| t.as_u64());
                 (value, timestamp)
             }
         };

@@ -35,7 +35,7 @@ use wallet::{sync_status, SyncStatus};
 
 use crate::{
     app::{
-        cache::{Cache, DaemonCache},
+        cache::{Cache, DaemonCache, FiatPrice},
         error::Error,
         menu::Menu,
         settings::WalletId,
@@ -43,7 +43,9 @@ use crate::{
     },
     daemon::{embedded::EmbeddedDaemon, Daemon, DaemonBackend},
     dir::LianaDirectory,
+    fiat::{api::PriceApi, PriceClient},
     node::{bitcoind::Bitcoind, NodeType},
+    utils::now,
 };
 
 use self::state::SettingsState;
@@ -308,13 +310,18 @@ impl App {
             .map(|_| Message::Tick),
             self.panels.current().subscription(),
         ];
-        if self
-            .wallet
-            .fiat_price_setting
-            .filter(|sett| sett.is_enabled)
-            .is_some()
+        if true
+        // let Some(price_setting) = self
+        //     .wallet
+        //     .fiat_price_setting
+        //     .filter(|sett| sett.is_enabled)
         {
-            subs.push(time::every(Duration::from_secs(10)).map(|_| Message::MaybeUpdateFiatPrice));
+            // let ps = price_setting.clone();
+            // println!(
+            //     "Subscribing to fiat price updates for {} from {}",
+            //     price_setting.currency, price_setting.source
+            // );
+            subs.push(time::every(Duration::from_secs(30)).map(|_| Message::GetFiatPrice));
         }
         Subscription::batch(subs)
     }
@@ -345,28 +352,6 @@ impl App {
                         // or if the access token is not expired.
                         daemon.is_alive(&datadir_path, network).await?;
 
-                        // let fiat_price =
-                        //     if let Some(sett) = fiat_price_setting.filter(|s| s.is_enabled) {
-                        //         if Some(sett.currency) != last_fiat_currency
-                        //             || last_fiat_timestamp
-                        //                 .map(|t| t + fiat::PRICE_UPDATE_INTERVAL < now())
-                        //                 .unwrap_or(true)
-                        //         {
-                        //             let fiat_price = fiat::get_fiat_price(
-                        //                 sett.currency,
-                        //                 fiat::PriceSource::CoinGecko,
-                        //             )
-                        //             .await
-                        //             .map_err(app::error::Error::Unexpected)?;
-                        //             Some(fiat_price)
-                        //         } else {
-                        //             None
-                        //         }
-                        //     } else {
-                        //         warn!("No fiat price setting found, using None");
-                        //         None
-                        //     };
-
                         let info = daemon.get_info().await?;
                         let coins = cache::coins_to_cache(daemon).await?;
                         Ok(DaemonCache {
@@ -380,55 +365,44 @@ impl App {
                     Message::UpdateDaemonCache,
                 )
             }
-            // Message::MaybeUpdateFiatPrice => {
-
-            //     let fiat_price_setting = self.wallet.fiat_price_setting;
-            //     let last_fiat_currency = self.fiat_price.as_ref().map(|(p, _)| p.ok()).flatten().map(|p| p.currency);
-            //     let last_fiat_timestamp = self.cache.fiat_price.as_ref().map(|p| p.timestamp);
-            //     Task::perform(
-            //         async move {
-            //             // we check every 10 second if the daemon poller is alive
-            //             // or if the access token is not expired.
-            //             daemon.is_alive(&datadir_path, network).await?;
-
-            //             // let fiat_price =
-            //             //     if let Some(sett) = fiat_price_setting.filter(|s| s.is_enabled) {
-            //             //         if Some(sett.currency) != last_fiat_currency
-            //             //             || last_fiat_timestamp
-            //             //                 .map(|t| t + fiat::PRICE_UPDATE_INTERVAL < now())
-            //             //                 .unwrap_or(true)
-            //             //         {
-            //             //             let fiat_price = fiat::get_fiat_price(
-            //             //                 sett.currency,
-            //             //                 fiat::PriceSource::CoinGecko,
-            //             //             )
-            //             //             .await
-            //             //             .map_err(app::error::Error::Unexpected)?;
-            //             //             Some(fiat_price)
-            //             //         } else {
-            //             //             None
-            //             //         }
-            //             //     } else {
-            //             //         warn!("No fiat price setting found, using None");
-            //             //         None
-            //             //     };
-
-            //             let info = daemon.get_info().await?;
-            //             let coins = cache::coins_to_cache(daemon).await?;
-            //             Ok(Cache {
-            //                 datadir_path,
-            //                 coins: coins.coins,
-            //                 network: info.network,
-            //                 blockheight: info.block_height,
-            //                 rescan_progress: info.rescan_progress,
-            //                 sync_progress: info.sync,
-            //                 last_poll_timestamp: info.last_poll_timestamp,
-            //                 last_poll_at_startup, // doesn't change
-            //             })
-            //         },
-            //         Message::UpdateCache,
-            //     )
-            // }
+            Message::GetFiatPrice => {
+                println!("getting fiat price");
+                if let Some(price_setting) = self
+                    .wallet
+                    .fiat_price_setting
+                    .filter(|sett| sett.is_enabled)
+                {
+                    return Task::perform(
+                        async move {
+                            let price_client =
+                                PriceClient::default_from_source(price_setting.source);
+                            (
+                                price_setting.source,
+                                price_setting.currency,
+                                price_client.get_price(price_setting.currency).await,
+                            )
+                        },
+                        |(source, currency, res)| Message::UpdateFiatPrice(source, currency, res),
+                    );
+                }
+                Task::none()
+            }
+            Message::UpdateFiatPrice(source, currency, res) => {
+                match res {
+                    Ok(price) => {
+                        println!("fiat price for {} from {}: {:?}", currency, source, price);
+                        self.cache.fiat_price = Some(FiatPrice {
+                            price,
+                            source,
+                            currency,
+                            requested_at: now().as_secs(),
+                        });
+                        return Task::perform(async {}, |_| Message::CacheUpdated);
+                    }
+                    Err(e) => tracing::error!("Failed to update fiat price: {:?}", e),
+                }
+                Task::none()
+            }
             Message::UpdateDaemonCache(res) => {
                 match res {
                     Ok(daemon_cache) => {

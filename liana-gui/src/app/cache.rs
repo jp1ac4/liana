@@ -92,7 +92,7 @@ pub async fn coins_to_cache(
 
 #[derive(Debug, Clone)]
 pub struct FiatPrice {
-    pub res: GetPriceResult,
+    pub price: GetPriceResult,
     pub currency: Currency,
     pub source: PriceSource,
     pub requested_at: u64,

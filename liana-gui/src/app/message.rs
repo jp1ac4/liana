@@ -8,6 +8,8 @@ use liana::miniscript::bitcoin::{
 };
 use lianad::config::Config as DaemonConfig;
 
+use crate::fiat::api::{GetPriceResult, PriceApiError};
+use crate::fiat::{Currency, PriceSource};
 use crate::{
     app::{cache::DaemonCache, error::Error, view, wallet::Wallet},
     daemon::model::*,
@@ -20,6 +22,8 @@ pub enum Message {
     Tick,
     UpdateDaemonCache(Result<DaemonCache, Error>),
     CacheUpdated,
+    GetFiatPrice,
+    UpdateFiatPrice(PriceSource, Currency, Result<GetPriceResult, PriceApiError>),
     UpdatePanelCache(/* is current panel */ bool),
     View(view::Message),
     LoadDaemonConfig(Box<DaemonConfig>),
@@ -56,7 +60,7 @@ pub enum Message {
     BroadcastModal(Result<HashSet<Txid>, Error>),
     RbfModal(Box<HistoryTransaction>, bool, Result<HashSet<Txid>, Error>),
     Export(ImportExportMessage),
-    MaybeUpdateFiatPrice,
+    // MaybeUpdateFiatPrice,
 }
 
 impl From<ImportExportMessage> for Message {

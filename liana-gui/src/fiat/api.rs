@@ -15,6 +15,7 @@ pub struct ListCurrenciesResult {
     pub currencies: Vec<Currency>,
 }
 
+#[derive(Debug, Clone)]
 pub enum PriceApiError {
     CurrencyNotFound,
     CannotParsePrice,
