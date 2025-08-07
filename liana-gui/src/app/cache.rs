@@ -4,7 +4,11 @@ use crate::{
         Daemon, DaemonError,
     },
     dir::LianaDirectory,
-    fiat::{api::GetPriceResult, Currency, PriceSource},
+    fiat::{
+        api::{GetPriceResult, PriceApi, PriceApiError},
+        client::PriceClient,
+        Currency, PriceSource,
+    },
 };
 use liana::miniscript::bitcoin::Network;
 use lianad::commands::CoinStatus;
@@ -92,8 +96,18 @@ pub async fn coins_to_cache(
 
 #[derive(Debug, Clone)]
 pub struct FiatPrice {
-    pub price: GetPriceResult,
+    pub price_res: Result<GetPriceResult, PriceApiError>,
     pub currency: Currency,
     pub source: PriceSource,
     pub requested_at: u64,
+}
+
+pub async fn get_fiat_price(source: PriceSource, currency: Currency) -> FiatPrice {
+    let client = PriceClient::default_from_source(source);
+    FiatPrice {
+        price_res: client.get_price(currency).await,
+        currency,
+        source: client.source,
+        requested_at: crate::utils::now().as_secs(),
+    }
 }

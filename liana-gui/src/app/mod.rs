@@ -310,18 +310,21 @@ impl App {
             .map(|_| Message::Tick),
             self.panels.current().subscription(),
         ];
-        if true
-        // let Some(price_setting) = self
-        //     .wallet
-        //     .fiat_price_setting
-        //     .filter(|sett| sett.is_enabled)
+        if self
+            .wallet
+            .fiat_price_setting
+            .as_ref()
+            .map(|sett| sett.is_enabled)
+            .unwrap_or_default()
         {
-            // let ps = price_setting.clone();
-            // println!(
-            //     "Subscribing to fiat price updates for {} from {}",
-            //     price_setting.currency, price_setting.source
-            // );
-            subs.push(time::every(Duration::from_secs(30)).map(|_| Message::GetFiatPrice));
+            subs.push(
+                time::every(Duration::from_secs(if self.cache.fiat_price.is_none() {
+                    1 // get price at startup. Find better way to do this.
+                } else {
+                    15 // use variable
+                }))
+                .map(|_| Message::FiatPriceTick),
+            );
         }
         Subscription::batch(subs)
     }
@@ -365,13 +368,16 @@ impl App {
                     Message::UpdateDaemonCache,
                 )
             }
-            Message::GetFiatPrice => {
-                println!("getting fiat price");
+            // TODO: should GetFiatPrice take arguments?
+            Message::FiatPriceTick | Message::GetFiatPrice => {
                 if let Some(price_setting) = self
                     .wallet
                     .fiat_price_setting
+                    .as_ref()
                     .filter(|sett| sett.is_enabled)
+                    .cloned()
                 {
+                    println!("getting fiat price {}", now().as_secs());
                     return Task::perform(
                         async move {
                             let price_client =
@@ -384,24 +390,33 @@ impl App {
                         },
                         |(source, currency, res)| Message::UpdateFiatPrice(source, currency, res),
                     );
+                } else {
+                    println!("Fiat price is not enabled in settings");
                 }
                 Task::none()
             }
-            Message::UpdateFiatPrice(source, currency, res) => {
-                match res {
-                    Ok(price) => {
-                        println!("fiat price for {} from {}: {:?}", currency, source, price);
-                        self.cache.fiat_price = Some(FiatPrice {
-                            price,
-                            source,
-                            currency,
-                            requested_at: now().as_secs(),
-                        });
-                        return Task::perform(async {}, |_| Message::CacheUpdated);
-                    }
-                    Err(e) => tracing::error!("Failed to update fiat price: {:?}", e),
-                }
-                Task::none()
+            Message::UpdateFiatPrice(source, currency, price_res) => {
+                self.cache.fiat_price = Some(FiatPrice {
+                    price_res,
+                    source,
+                    currency,
+                    requested_at: now().as_secs(),
+                });
+                Task::perform(async {}, |_| Message::CacheUpdated)
+                // match res {
+                //     Ok(price) => {
+                //         println!("fiat price for {} from {}: {:?}", currency, source, price);
+                //         self.cache.fiat_price = Some(FiatPrice {
+                //             price,
+                //             source,
+                //             currency,
+                //             requested_at: now().as_secs(),
+                //         });
+                //         return Task::perform(async {}, |_| Message::CacheUpdated);
+                //     }
+                //     Err(e) => tracing::error!("Failed to update fiat price: {:?}", e),
+                // }
+                // Task::none()
             }
             Message::UpdateDaemonCache(res) => {
                 match res {

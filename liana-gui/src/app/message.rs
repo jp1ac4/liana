@@ -8,7 +8,7 @@ use liana::miniscript::bitcoin::{
 };
 use lianad::config::Config as DaemonConfig;
 
-use crate::fiat::api::{GetPriceResult, PriceApiError};
+use crate::fiat::api::{GetPriceResult, ListCurrenciesResult, PriceApiError};
 use crate::fiat::{Currency, PriceSource};
 use crate::{
     app::{cache::DaemonCache, error::Error, view, wallet::Wallet},
@@ -20,9 +20,11 @@ use crate::{
 #[derive(Debug)]
 pub enum Message {
     Tick,
+    FiatPriceTick,
     UpdateDaemonCache(Result<DaemonCache, Error>),
     CacheUpdated,
     GetFiatPrice,
+    Fiat(FiatMessage),
     UpdateFiatPrice(PriceSource, Currency, Result<GetPriceResult, PriceApiError>),
     UpdatePanelCache(/* is current panel */ bool),
     View(view::Message),
@@ -67,4 +69,12 @@ impl From<ImportExportMessage> for Message {
     fn from(value: ImportExportMessage) -> Self {
         Message::View(view::Message::ImportExport(value))
     }
+}
+
+#[derive(Debug)]
+pub enum FiatMessage {
+    PriceTick,
+    GetPriceResult(PriceSource, Currency, Result<GetPriceResult, PriceApiError>),
+    UpdateCurrencies(PriceSource),
+    ListCurrenciesResult(PriceSource, u64, Result<ListCurrenciesResult, Error>),
 }

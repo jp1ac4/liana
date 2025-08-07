@@ -7,7 +7,7 @@ use crate::http::NotSuccessResponseInfo;
 #[derive(Debug, Clone)]
 pub struct GetPriceResult {
     pub value: u64,
-    pub timestamp: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -17,11 +17,21 @@ pub struct ListCurrenciesResult {
 
 #[derive(Debug, Clone)]
 pub enum PriceApiError {
-    CurrencyNotFound,
-    CannotParsePrice,
     RequestFailed(String),
     NotSuccessResponse(NotSuccessResponseInfo),
     CannotParseResponse(String),
+    CannotParseData(String),
+}
+
+impl std::fmt::Display for PriceApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RequestFailed(e) => write!(f, "Request failed: {}", e),
+            Self::NotSuccessResponse(info) => write!(f, "Not success response: {:?}", info),
+            Self::CannotParseResponse(e) => write!(f, "Cannot parse response: {}", e),
+            Self::CannotParseData(e) => write!(f, "Cannot parse data: {}", e),
+        }
+    }
 }
 
 #[async_trait]

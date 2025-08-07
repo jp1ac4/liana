@@ -1,10 +1,6 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-use crate::utils::serde::deser_fromstr;
-
 macro_rules! currency_enum {
     ($name:ident { $($variant:ident),* $(,)? }) => {
-        #[derive(Debug, Clone, Copy, Default, PartialEq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Default)]
         pub enum $name {
             #[default]
             $($variant,)*
@@ -32,7 +28,7 @@ macro_rules! currency_enum {
 }
 
 currency_enum!(Currency {
-    USD,
+    USD, // first variant is the default
     AED,
     ARS,
     AUD,
@@ -59,20 +55,26 @@ currency_enum!(Currency {
     KWD,
 });
 
-impl<'de> Deserialize<'de> for Currency {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deser_fromstr(deserializer)
-    }
-}
+// impl Default for Currency {
+//     fn default() -> Self {
+//         Currency::USD
+//     }
+// }
 
-impl Serialize for Currency {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.collect_str(&self)
-    }
-}
+// impl<'de> Deserialize<'de> for Currency {
+//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+//     where
+//         D: Deserializer<'de>,
+//     {
+//         deser_fromstr(deserializer)
+//     }
+// }
+
+// impl Serialize for Currency {
+//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+//     where
+//         S: Serializer,
+//     {
+//         serializer.collect_str(&self)
+//     }
+// }

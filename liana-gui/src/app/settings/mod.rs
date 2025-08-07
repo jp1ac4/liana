@@ -20,6 +20,7 @@ use crate::{
     dir::NetworkDirectory,
     hw::HardwareWalletConfig,
     services::{self, connect::client::backend},
+    utils::serde::ok_or_none,
 };
 
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -149,6 +150,9 @@ pub struct WalletSettings {
     /// Start internal bitcoind executable.
     /// if None, the app must refer to the gui.toml start_internal_bitcoind field.
     pub start_internal_bitcoind: Option<bool>,
+    // If the settings file contains a currency or source that is no longer supported, the price
+    // setting will be set to None during deserialization and the user will need to reconfigure it.
+    #[serde(default, deserialize_with = "ok_or_none")]
     pub fiat_price: Option<fiat::PriceSetting>,
 }
 

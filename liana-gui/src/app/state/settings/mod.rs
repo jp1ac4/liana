@@ -1,4 +1,5 @@
 mod bitcoind;
+mod general;
 mod wallet;
 
 use std::convert::From;

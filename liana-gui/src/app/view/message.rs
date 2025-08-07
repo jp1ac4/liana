@@ -1,4 +1,9 @@
-use crate::{app::menu::Menu, export::ImportExportMessage, node::bitcoind::RpcAuthType};
+use crate::{
+    app::menu::Menu,
+    export::ImportExportMessage,
+    fiat::{Currency, PriceSource},
+    node::bitcoind::RpcAuthType,
+};
 use liana::miniscript::bitcoin::{bip32::Fingerprint, Address, OutPoint};
 
 pub trait Close {
@@ -102,6 +107,7 @@ pub enum SettingsMessage {
     FingerprintAliasEdited(Fingerprint, String),
     WalletAliasEdited(String),
     Save,
+    Fiat(FiatMessage),
 }
 
 #[derive(Debug, Clone)]
@@ -127,4 +133,11 @@ pub enum CreateRbfMessage {
     FeerateEdited(String),
     Cancel,
     Confirm,
+}
+
+#[derive(Debug, Clone)]
+pub enum FiatMessage {
+    Enable(bool),
+    SourceEdited(PriceSource),
+    CurrencyEdited(Currency),
 }
