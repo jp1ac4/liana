@@ -1,6 +1,6 @@
 macro_rules! currency_enum {
     ($name:ident { $($variant:ident),* $(,)? }) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Default)]
+        #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Default)]
         pub enum $name {
             #[default]
             $($variant,)*

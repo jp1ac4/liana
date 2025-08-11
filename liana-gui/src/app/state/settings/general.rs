@@ -13,10 +13,11 @@ use std::{collections::HashMap, sync::Arc};
 // };
 
 use iced::Task;
+use liana::miniscript::bitcoin::Network;
 
 use crate::{
     app::{
-        cache::Cache,
+        cache::{self, Cache},
         error::Error,
         message::{FiatMessage, Message},
         settings::{self, fiat::PriceSetting, update_settings_file},
@@ -30,6 +31,7 @@ use crate::{
     export::{ImportExportMessage, ImportExportType},
     fiat::{
         api::PriceApi,
+        currency,
         source::{self, ALL_PRICE_SOURCES},
         Currency, PriceClient, PriceSource,
     },
@@ -38,6 +40,38 @@ use crate::{
     utils::now,
 };
 
+fn price_setting_from_wallet(wallet: &Wallet) -> PriceSetting {
+    wallet
+        .fiat_price_setting
+        .as_ref()
+        .cloned()
+        .unwrap_or_default()
+}
+
+async fn update_price_setting(
+    data_dir: LianaDirectory,
+    network: Network,
+    wallet: Arc<Wallet>,
+    new_price_setting: PriceSetting,
+) -> Result<Arc<Wallet>, Error> {
+    let mut wallet = wallet.as_ref().clone();
+    wallet = wallet.with_fiat_price_setting(Some(new_price_setting.clone()));
+    let network_dir = data_dir.network_directory(network);
+    let wallet_id = wallet.id();
+    update_settings_file(&network_dir, |mut settings| {
+        if let Some(wallet_setting) = settings
+            .wallets
+            .iter_mut()
+            .find(|w| w.wallet_id() == wallet_id)
+        {
+            wallet_setting.fiat_price = Some(new_price_setting);
+        }
+        settings
+    })
+    .await?;
+    Ok(Arc::new(wallet))
+}
+
 pub struct FiatPriceSettingsState {
     wallet: Arc<Wallet>,
     new_price_setting: PriceSetting,
@@ -45,7 +79,7 @@ pub struct FiatPriceSettingsState {
     // source: PriceSource,
     // currency: Currency,
     currencies_list: HashMap<PriceSource, (u64, Vec<Currency>)>,
-    prices_cache: HashMap<PriceSource, HashMap<Currency, u64>>,
+    // prices_cache: HashMap<PriceSource, HashMap<Currency, u64>>,
     error: Option<Error>,
 }
 
@@ -66,11 +100,7 @@ impl FiatPriceSettingsState {
         //     "Source {} is not in the list of available sources",
         //     source,
         // );
-        let new_price_setting = wallet
-            .fiat_price_setting
-            .as_ref()
-            .cloned()
-            .unwrap_or_default();
+        let new_price_setting = price_setting_from_wallet(&wallet);
         let currencies_list = ALL_PRICE_SOURCES
             .iter()
             .map(|s| {
@@ -87,10 +117,10 @@ impl FiatPriceSettingsState {
                 )
             })
             .collect();
-        let prices_cache = ALL_PRICE_SOURCES
-            .iter()
-            .map(|s| (*s, HashMap::new()))
-            .collect();
+        // let prices_cache = ALL_PRICE_SOURCES
+        //     .iter()
+        //     .map(|s| (*s, HashMap::new()))
+        //     .collect();
         FiatPriceSettingsState {
             wallet,
             // is_enabled,
@@ -99,7 +129,7 @@ impl FiatPriceSettingsState {
             new_price_setting,
             currencies_list,
 
-            prices_cache,
+            // prices_cache,
             error: None,
         }
     }
@@ -115,14 +145,17 @@ impl State for FiatPriceSettingsState {
         _daemon: Arc<dyn Daemon + Sync + Send>,
         wallet: Arc<Wallet>,
     ) -> iced::Task<Message> {
-        let mut new = FiatPriceSettingsState::new(wallet);
-        new.currencies_list = self.currencies_list.clone();
-        *self = new;
+        self.new_price_setting = price_setting_from_wallet(&wallet);
+        self.wallet = wallet.clone();
         if self.new_price_setting.is_enabled {
             let source = self.new_price_setting.source;
             return Task::perform(async move { source }, |source| {
                 Message::Fiat(FiatMessage::UpdateCurrencies(source))
             });
+        } else if self.wallet.fiat_price_setting.is_none() {
+            // If the wallet does not have a fiat price setting, save the default disabled setting
+            // to indicate that the user has seen the setting option (and a notification is no longer required).
+            return Task::perform(async move {}, |_| Message::Fiat(FiatMessage::SaveChanges));
         }
         Task::none()
     }
@@ -130,17 +163,45 @@ impl State for FiatPriceSettingsState {
     fn update(
         &mut self,
         _daemon: Arc<dyn Daemon + Sync + Send>,
-        _cache: &Cache,
-        _message: Message,
+        cache: &Cache,
+        message: Message,
     ) -> Task<Message> {
-        match _message {
+        match message {
+            Message::WalletUpdated(res) => {
+                match res {
+                    Ok(wallet) => {
+                        self.wallet = wallet;
+                        self.new_price_setting = price_setting_from_wallet(&self.wallet);
+                        self.error = None;
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                    }
+                }
+                Task::none()
+            }
+            Message::Fiat(FiatMessage::SaveChanges) => {
+                if Some(&self.new_price_setting) != self.wallet.fiat_price_setting.as_ref() {
+                    let wallet = self.wallet.clone();
+                    let price_setting = self.new_price_setting.clone();
+                    let network = cache.network;
+                    let datadir_path = cache.datadir_path.clone();
+                    return Task::perform(
+                        async move {
+                            update_price_setting(datadir_path, network, wallet, price_setting).await
+                        },
+                        |res| Message::WalletUpdated(res),
+                    );
+                }
+                Task::none()
+            }
             Message::Fiat(FiatMessage::ListCurrenciesResult(source, requested_at, res)) => {
                 match res {
                     Ok(list) => {
-                        if self
+                        if !self
                             .currencies_list
                             .get(&source)
-                            .is_some_and(|(timestamp, _)| *timestamp < requested_at)
+                            .is_some_and(|(old, _)| *old > requested_at)
                         {
                             if !list.currencies.contains(&self.new_price_setting.currency) {
                                 if let Some(curr) = list.currencies.first() {
@@ -150,11 +211,30 @@ impl State for FiatPriceSettingsState {
                             self.currencies_list
                                 .insert(source, (requested_at, list.currencies));
                         }
-                        if self.new_price_setting.is_enabled {
-                            return Task::perform(async move {}, |_| {
-                                Message::Fiat(FiatMessage::PriceTick)
-                            });
-                        }
+                        return Task::perform(async move {}, |_| {
+                            Message::Fiat(FiatMessage::SaveChanges)
+                        });
+
+                        // TODO: update settings file & wallet with new price setting.
+
+                        // if self.new_price_setting.is_enabled {
+                        //     let now = now().as_secs();
+                        //     if !self
+                        //         .prices_cache
+                        //         .get(&source)
+                        //         .and_then(|curr_map| curr_map.get(&self.new_price_setting.currency))
+                        //         .is_some_and(|timestamp| now.saturating_sub(*timestamp) < 100)
+                        //     {
+                        //         let source = self.new_price_setting.source;
+                        //         let currency = self.new_price_setting.currency;
+                        //         return Task::perform(
+                        //             async move { (source, currency) },
+                        //             |(source, currency)| {
+                        //                 Message::Fiat(FiatMessage::GetPrice(source, currency))
+                        //             },
+                        //         );
+                        //     }
+                        // }
                     }
                     Err(e) => {
                         self.error = Some(e);
@@ -162,6 +242,17 @@ impl State for FiatPriceSettingsState {
                 }
                 Task::none()
             }
+            // Message::Fiat(FiatMessage::GetPrice(source, currency)) => {
+            //     if self.new_price_setting.is_enabled {
+            //         return Task::perform(
+            //             async move { cache::get_fiat_price(source, currency).await },
+            //             move |res| {
+            //                 Message::Fiat(FiatMessage::GetPriceResult(res))
+            //             },
+            //         );
+            //     }
+            //     Task::none()
+            // }
             Message::Fiat(FiatMessage::UpdateCurrencies(source)) => {
                 if self.new_price_setting.is_enabled {
                     // Do not get currencies list if it has already been set for this source recently.
@@ -200,6 +291,10 @@ impl State for FiatPriceSettingsState {
                                 async move { PriceSource::default() },
                                 |source| Message::Fiat(FiatMessage::UpdateCurrencies(source)),
                             );
+                        } else {
+                            return Task::perform(async move {}, |_| {
+                                Message::Fiat(FiatMessage::SaveChanges)
+                            });
                         }
                     }
                     view::FiatMessage::SourceEdited(source) => {
@@ -213,13 +308,15 @@ impl State for FiatPriceSettingsState {
                     }
                     view::FiatMessage::CurrencyEdited(currency) => {
                         self.new_price_setting.currency = currency;
-                        // TODO: need to make sure wallet has been updated before tick...
-                        // and need to update settings file.
-                        if self.new_price_setting.is_enabled {
-                            return Task::perform(async move {}, |_| {
-                                Message::Fiat(FiatMessage::PriceTick)
-                            });
-                        }
+                        return Task::perform(async move {}, |_| {
+                            Message::Fiat(FiatMessage::SaveChanges)
+                        });
+
+                        // if self.new_price_setting.is_enabled {
+                        //     return Task::perform(async move {}, |_| {
+                        //         Message::Fiat(FiatMessage::PriceTick)
+                        //     });
+                        // }
                     }
                 }
                 Task::none()
@@ -254,233 +351,3 @@ impl State for FiatPriceSettingsState {
         }
     }
 }
-
-// impl State for FiatPriceSettingsState {
-//     fn view<'a>(&'a self, cache: &'a Cache) -> Element<'a, view::Message> {
-//         let content = view::settings::general: wallet_settings(
-//             cache,
-//             self.warning.as_ref(),
-//             &self.descriptor,
-//             &self.wallet_alias,
-//             &self.keys_aliases,
-//             &self.wallet.provider_keys,
-//             self.processing,
-//             self.updated,
-//         );
-
-//         match &self.modal {
-//             Modal::None => content,
-//             Modal::RegisterWallet(m) => modal::Modal::new(content, m.view())
-//                 .on_blur(Some(view::Message::Close))
-//                 .into(),
-//             Modal::ImportExport(m) => m.view(content),
-//         }
-//     }
-
-//     fn subscription(&self) -> Subscription<Message> {
-//         match &self.modal {
-//             Modal::None => Subscription::none(),
-//             Modal::RegisterWallet(modal) => modal.subscription(),
-//             Modal::ImportExport(modal) => {
-//                 if let Some(sub) = modal.subscription() {
-//                     sub.map(|m| {
-//                         Message::View(view::Message::Settings(
-//                             view::SettingsMessage::ImportExport(ImportExportMessage::Progress(m)),
-//                         ))
-//                     })
-//                 } else {
-//                     Subscription::none()
-//                 }
-//             }
-//         }
-//     }
-
-//     fn update(
-//         &mut self,
-//         daemon: Arc<dyn Daemon + Sync + Send>,
-//         cache: &Cache,
-//         message: Message,
-//     ) -> Task<Message> {
-//         match message {
-//             Message::WalletUpdated(res) => {
-//                 self.processing = false;
-//                 if let Modal::RegisterWallet(modal) = &mut self.modal {
-//                     modal.update(daemon, cache, Message::WalletUpdated(res))
-//                 } else {
-//                     match res {
-//                         Ok(wallet) => {
-//                             self.keys_aliases = Self::keys_aliases(&wallet);
-//                             self.wallet = wallet;
-//                             self.updated = true;
-//                         }
-//                         Err(e) => self.warning = Some(e),
-//                     };
-//                     Task::none()
-//                 }
-//             }
-//             Message::View(view::Message::Settings(view::SettingsMessage::WalletAliasEdited(
-//                 alias,
-//             ))) => {
-//                 self.wallet_alias.valid = alias.len() < WALLET_ALIAS_MAXIMUM_LENGTH;
-//                 self.wallet_alias.value = alias;
-//                 Task::none()
-//             }
-//             Message::View(view::Message::Settings(
-//                 view::SettingsMessage::FingerprintAliasEdited(fg, value),
-//             )) => {
-//                 if let Some((_, name)) = self
-//                     .keys_aliases
-//                     .iter_mut()
-//                     .find(|(fingerprint, _)| fg == *fingerprint)
-//                 {
-//                     name.value = value;
-//                 }
-//                 Task::none()
-//             }
-//             Message::View(view::Message::Settings(view::SettingsMessage::Save)) => {
-//                 self.modal = Modal::None;
-//                 self.processing = true;
-//                 self.updated = false;
-//                 Task::perform(
-//                     update_aliases(
-//                         self.data_dir.clone(),
-//                         cache.network,
-//                         self.wallet.clone(),
-//                         match self
-//                             .wallet
-//                             .alias
-//                             .as_ref()
-//                             .map(|a| *a == self.wallet_alias.value)
-//                         {
-//                             Some(true) => None,
-//                             Some(false) => Some(self.wallet_alias.value.clone()),
-//                             None => {
-//                                 if self.wallet_alias.value.is_empty() {
-//                                     None
-//                                 } else {
-//                                     Some(self.wallet_alias.value.clone())
-//                                 }
-//                             }
-//                         },
-//                         self.keys_aliases
-//                             .iter()
-//                             .map(|(fg, name)| (*fg, name.value.to_owned()))
-//                             .collect(),
-//                         daemon,
-//                     ),
-//                     Message::WalletUpdated,
-//                 )
-//             }
-//             Message::View(view::Message::Close) => {
-//                 self.modal = Modal::None;
-//                 Task::none()
-//             }
-//             Message::View(view::Message::Settings(view::SettingsMessage::RegisterWallet)) => {
-//                 self.modal = Modal::RegisterWallet(RegisterWalletModal::new(
-//                     self.data_dir.clone(),
-//                     self.wallet.clone(),
-//                     cache.network,
-//                 ));
-//                 Task::none()
-//             }
-
-//             Message::View(view::Message::ImportExport(ImportExportMessage::UpdateAliases(
-//                 aliases,
-//             ))) => {
-//                 self.processing = true;
-//                 self.updated = false;
-//                 Task::perform(
-//                     update_aliases(
-//                         self.data_dir.clone(),
-//                         cache.network,
-//                         self.wallet.clone(),
-//                         None,
-//                         aliases.into_iter().map(|(fg, ks)| (fg, ks.name)).collect(),
-//                         daemon,
-//                     ),
-//                     Message::WalletUpdated,
-//                 )
-//             }
-//             Message::View(view::Message::ImportExport(ImportExportMessage::Close)) => {
-//                 if let Modal::ImportExport(_) = &self.modal {
-//                     self.modal = Modal::None;
-//                 }
-//                 Task::none()
-//             }
-//             Message::View(view::Message::ImportExport(m)) => {
-//                 if let Modal::ImportExport(modal) = &mut self.modal {
-//                     modal.update(m)
-//                 } else {
-//                     Task::none()
-//                 }
-//             }
-//             Message::View(view::Message::Settings(view::SettingsMessage::ImportExport(m))) => {
-//                 if let Modal::ImportExport(modal) = &mut self.modal {
-//                     modal.update(m)
-//                 } else {
-//                     Task::none()
-//                 }
-//             }
-//             Message::View(view::Message::Settings(view::SettingsMessage::ExportWallet)) => {
-//                 if self.modal.is_none() {
-//                     let datadir = cache.datadir_path.clone();
-//                     let network = cache.network;
-//                     let config = self.config.clone();
-//                     let wallet = self.wallet.clone();
-//                     let daemon = daemon.clone();
-//                     let modal = ExportModal::new(
-//                         Some(daemon),
-//                         ImportExportType::ExportProcessBackup(datadir, network, config, wallet),
-//                     );
-//                     let launch = modal.launch(true);
-//                     self.modal = Modal::ImportExport(modal);
-//                     launch
-//                 } else {
-//                     Task::none()
-//                 }
-//             }
-//             Message::View(view::Message::Settings(view::SettingsMessage::ImportWallet)) => {
-//                 if self.modal.is_none() {
-//                     let modal = ExportModal::new(
-//                         Some(daemon),
-//                         ImportExportType::ImportBackup {
-//                             network_dir: cache.datadir_path.network_directory(cache.network),
-//                             wallet: self.wallet.clone(),
-//                             overwrite_labels: None,
-//                             overwrite_aliases: None,
-//                         },
-//                     );
-//                     let launch = modal.launch(false);
-//                     self.modal = Modal::ImportExport(modal);
-//                     launch
-//                 } else {
-//                     Task::none()
-//                 }
-//             }
-//             _ => match &mut self.modal {
-//                 Modal::RegisterWallet(m) => m.update(daemon, cache, message),
-//                 _ => Task::none(),
-//             },
-//         }
-//     }
-
-//     fn reload(
-//         &mut self,
-//         daemon: Arc<dyn Daemon + Sync + Send>,
-//         wallet: Arc<Wallet>,
-//     ) -> Task<Message> {
-//         self.descriptor = wallet.main_descriptor.clone();
-//         self.keys_aliases = Self::keys_aliases(&wallet);
-//         self.wallet = wallet;
-//         Task::perform(
-//             async move { daemon.get_info().await.map_err(|e| e.into()) },
-//             Message::Info,
-//         )
-//     }
-// }
-
-// impl From<WalletSettingsState> for Box<dyn State> {
-//     fn from(s: WalletSettingsState) -> Box<dyn State> {
-//         Box::new(s)
-//     }
-// }

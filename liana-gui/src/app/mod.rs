@@ -278,6 +278,7 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
+        println!("Creating subscriptions for app at {}", now().as_secs());
         let mut subs = vec![
             time::every(Duration::from_secs(
                 match sync_status(
