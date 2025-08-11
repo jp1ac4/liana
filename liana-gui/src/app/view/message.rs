@@ -107,6 +107,7 @@ pub enum SettingsMessage {
     FingerprintAliasEdited(Fingerprint, String),
     WalletAliasEdited(String),
     Save,
+    GeneralSection,
     Fiat(FiatMessage),
 }
 

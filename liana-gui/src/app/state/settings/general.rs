@@ -1,44 +1,20 @@
 use std::{collections::HashMap, sync::Arc};
 
-// use iced::{Subscription, Task};
-
-// use liana::{
-//     descriptors::LianaDescriptor,
-//     miniscript::bitcoin::{bip32::Fingerprint, Network},
-// };
-
-// use liana_ui::{
-//     component::{form, modal},
-//     widget::Element,
-// };
-
 use iced::Task;
 use liana::miniscript::bitcoin::Network;
 
-use crate::{
-    app::{
-        cache::{self, Cache},
-        error::Error,
-        message::{FiatMessage, Message},
-        settings::{self, fiat::PriceSetting, update_settings_file},
-        state::{export::ExportModal, State},
-        view,
-        wallet::Wallet,
-        Config,
-    },
-    daemon::{Daemon, DaemonBackend},
-    dir::LianaDirectory,
-    export::{ImportExportMessage, ImportExportType},
-    fiat::{
-        api::PriceApi,
-        currency,
-        source::{self, ALL_PRICE_SOURCES},
-        Currency, PriceClient, PriceSource,
-    },
-    hw::{HardwareWallet, HardwareWalletConfig, HardwareWallets},
-    services::connect::client::backend::api::WALLET_ALIAS_MAXIMUM_LENGTH,
-    utils::now,
-};
+use crate::app::cache::Cache;
+use crate::app::error::Error;
+use crate::app::message::{FiatMessage, Message};
+use crate::app::settings::{fiat::PriceSetting, update_settings_file};
+use crate::app::state::State;
+use crate::app::view;
+use crate::app::wallet::Wallet;
+use crate::daemon::Daemon;
+use crate::dir::LianaDirectory;
+use crate::fiat::api::PriceApi;
+use crate::fiat::{Currency, PriceClient, PriceSource, ALL_PRICE_SOURCES};
+use crate::utils::now;
 
 fn price_setting_from_wallet(wallet: &Wallet) -> PriceSetting {
     wallet
@@ -136,7 +112,7 @@ impl FiatPriceSettingsState {
 }
 
 impl State for FiatPriceSettingsState {
-    fn view<'a>(&'a self, cache: &'a Cache) -> liana_ui::widget::Element<'a, view::Message> {
+    fn view<'a>(&'a self, _cache: &'a Cache) -> liana_ui::widget::Element<'a, view::Message> {
         todo!()
     }
 
@@ -190,7 +166,7 @@ impl State for FiatPriceSettingsState {
                         async move {
                             update_price_setting(datadir_path, network, wallet, price_setting).await
                         },
-                        |res| Message::WalletUpdated(res),
+                        Message::WalletUpdated,
                     );
                 }
                 Task::none()
@@ -311,43 +287,17 @@ impl State for FiatPriceSettingsState {
                         return Task::perform(async move {}, |_| {
                             Message::Fiat(FiatMessage::SaveChanges)
                         });
-
-                        // if self.new_price_setting.is_enabled {
-                        //     return Task::perform(async move {}, |_| {
-                        //         Message::Fiat(FiatMessage::PriceTick)
-                        //     });
-                        // }
                     }
                 }
                 Task::none()
             }
-            // Message::Fiat(FiatMessage::UpdatePrice(source, currency, res)) => {
-            //     if let Ok(price) = res {
-            //         self.source = source;
-            //         self.currency = currency;
-            //         self.currencies_list = price.currencies;
-            //     } else {
-            //         self.error = Some(Error::FiatPrice(res.unwrap_err()));
-            //     }
-            // }
-            // Message::View(view::Message::Settings(view::SettingsMessage::FiatPriceEnabled(
-            //     is_enabled,
-            // ))) => {
-            //     self.is_enabled = is_enabled;
-            // }
-            // Message::View(view::Message::Settings(view::SettingsMessage::FiatPriceSource(
-            //     source,
-            // ))) => {
-            //     self.source = source;
-            //     self.currencies_list.clear();
-            //     self.currencies_list.push(Currency::default());
-            // }
-            // Message::View(view::Message::Settings(view::SettingsMessage::FiatPriceCurrency(
-            //     currency,
-            // ))) => {
-            //     self.currency = currency;
-            // }
             _ => Task::none(),
         }
+    }
+}
+
+impl From<FiatPriceSettingsState> for Box<dyn State> {
+    fn from(s: FiatPriceSettingsState) -> Box<dyn State> {
+        Box::new(s)
     }
 }
