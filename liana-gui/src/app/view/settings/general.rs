@@ -1,85 +1,88 @@
-use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
+use iced::widget::{pick_list, radio, Column};
+use iced::Alignment;
+use iced::{widget::Space, Length};
 
-use iced::alignment::Vertical;
-use iced::widget::{Column, Rule};
-use iced::{
-    alignment,
-    widget::{radio, scrollable, tooltip as iced_tooltip, Space},
-    Alignment, Length,
-};
-
-use liana::{
-    descriptors::{LianaDescriptor, LianaPolicy},
-    miniscript::bitcoin::{bip32::Fingerprint, Network},
-};
-use lianad::config::BitcoindRpcAuth;
-
-use super::{dashboard, message::*};
+use super::header;
 
 use liana_ui::{
-    component::{badge, button, card, form, separation, text::*, tooltip::tooltip},
-    icon,
-    theme::{self},
+    component::{button, card, form, text::*},
+    theme,
     widget::*,
 };
 
-use crate::{
-    app::{
-        cache::Cache,
-        error::Error,
-        menu::Menu,
-        settings::ProviderKey,
-        view::{hw, warning::warn},
-    },
-    help,
-    hw::HardwareWallet,
-    node::{
-        bitcoind::{RpcAuthType, RpcAuthValues},
-        electrum::{self, validate_domain_checkbox},
-    },
+use crate::app::cache;
+use crate::app::settings::fiat::PriceSetting;
+use crate::app::{
+    error::Error,
+    menu::Menu,
+    view::{dashboard, message::*},
 };
+use crate::services::fiat::{Currency, ALL_PRICE_SOURCES};
 
-pub fn section<'a>(
-    cache: &'a Cache,
-    email_form: &form::Value<String>,
-    processing: bool,
-    success: bool,
+pub fn general_section<'a>(
+    cache: &'a cache::Cache,
+    new_price_setting: &'a PriceSetting,
+    currencies_list: &'a [Currency],
     warning: Option<&Error>,
 ) -> Element<'a, Message> {
-    let header = header("General", SettingsMessage::EditRemoteBackendSettings);
+    let header = header("General", SettingsMessage::GeneralSection);
 
     let content = card::simple(
         Column::new()
             .spacing(20)
-            .push(text("Grant access to wallet to another user"))
             .push(
-                form::Form::new_trimmed("User email", email_form, |email| {
-                    Message::Settings(SettingsMessage::RemoteBackendSettings(
-                        RemoteBackendSettingsMessage::EditInvitationEmail(email),
-                    ))
-                })
-                .warning("Email is invalid")
-                .size(P1_SIZE)
-                .padding(10),
+                [true, false].iter().fold(
+                    Row::new()
+                        .push(text("Fiat price").small().bold())
+                        .spacing(10),
+                    |row, enable| {
+                        row.push(radio(
+                            match enable {
+                                true => "On",
+                                false => "Off",
+                            },
+                            enable,
+                            Some(&new_price_setting.is_enabled),
+                            |new_selection| {
+                                Message::Settings(SettingsMessage::Fiat(FiatMessage::Enable(
+                                    *new_selection,
+                                )))
+                            },
+                        ))
+                        .spacing(30)
+                        .align_y(Alignment::Center)
+                    },
+                ),
             )
-            .push(
-                Row::new()
-                    .push_maybe(if success {
-                        Some(text("Invitation was sent").style(theme::text::success))
-                    } else {
-                        None
-                    })
-                    .push(Space::with_width(Length::Fill))
-                    .push(button::secondary(None, "Send invitation").on_press_maybe(
-                        if !processing && email_form.valid {
-                            Some(Message::Settings(SettingsMessage::RemoteBackendSettings(
-                                RemoteBackendSettingsMessage::SendInvitation,
+            .push_maybe(
+                new_price_setting.is_enabled.then_some(
+                    pick_list(
+                        &ALL_PRICE_SOURCES[..],
+                        Some(new_price_setting.source),
+                        |source| {
+                            Message::Settings(SettingsMessage::Fiat(FiatMessage::SourceEdited(
+                                source,
                             )))
-                        } else {
-                            None
                         },
-                    )),
+                    )
+                    .style(theme::pick_list::primary)
+                    .padding(10),
+                ),
+            )
+            .push_maybe(
+                new_price_setting.is_enabled.then_some(
+                    pick_list(
+                        currencies_list,
+                        Some(new_price_setting.currency),
+                        |currency| {
+                            Message::Settings(SettingsMessage::Fiat(FiatMessage::CurrencyEdited(
+                                currency,
+                            )))
+                        },
+                    )
+                    .style(theme::pick_list::primary)
+                    .padding(10),
+                ),
             ),
     )
     .width(Length::Fill);
@@ -88,13 +91,6 @@ pub fn section<'a>(
         &Menu::Settings,
         cache,
         warning,
-        Column::new()
-            .spacing(20)
-            .push(header)
-            .push(content)
-            .push(link(
-                help::CHANGE_BACKEND_OR_NODE_URL,
-                "I want to connect to my own node",
-            )),
+        Column::new().spacing(20).push(header).push(content),
     )
 }

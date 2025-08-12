@@ -61,15 +61,7 @@ impl PriceSource {
         data: &serde_json::Value,
     ) -> Result<GetPriceResult, PriceApiError> {
         let (value, updated_at) = match self {
-            PriceSource::MempoolSpace => {
-                let value = data
-                    .get(currency.to_string())
-                    .and_then(|curr| curr.as_u64())
-                    .ok_or(PriceApiError::CannotParseData("price".to_string()))?;
-                let updated_at = data.get("timestamp").and_then(|t| t.as_u64());
-                (value, updated_at)
-            }
-            PriceSource::CoinGecko => {
+            Self::CoinGecko => {
                 let btc = data.get("btc").ok_or(PriceApiError::CannotParseData(
                     "missing key 'btc'".to_string(),
                 ))?;
@@ -80,6 +72,14 @@ impl PriceSource {
                 let updated_at = btc.get("last_updated_at").and_then(|t| t.as_u64());
                 (value, updated_at)
             }
+            Self::MempoolSpace => {
+                let value = data
+                    .get(currency.to_string())
+                    .and_then(|curr| curr.as_u64())
+                    .ok_or(PriceApiError::CannotParseData("price".to_string()))?;
+                let updated_at = data.get("timestamp").and_then(|t| t.as_u64());
+                (value, updated_at)
+            }
         };
         Ok(GetPriceResult { value, updated_at })
     }
@@ -88,32 +88,25 @@ impl PriceSource {
         &self,
         data: &serde_json::Value,
     ) -> Result<ListCurrenciesResult, PriceApiError> {
-        let currencies: Vec<_> = data
-            .as_object()
-            .ok_or(PriceApiError::CannotParseData(
-                "data is not object".to_string(),
-            ))?
-            .keys()
-            .filter_map(|k| k.parse::<Currency>().ok())
-            .collect();
+        println!("parsing data: {:?}", data);
+        let currencies: Vec<_> = match self {
+            Self::CoinGecko => data
+                .as_array()
+                .ok_or(PriceApiError::CannotParseData(
+                    "data is not array".to_string(),
+                ))?
+                .iter()
+                .filter_map(|v| v.as_str().and_then(|s| s.parse::<Currency>().ok()))
+                .collect(),
+            Self::MempoolSpace => data
+                .as_object()
+                .ok_or(PriceApiError::CannotParseData(
+                    "data is not object".to_string(),
+                ))?
+                .keys()
+                .filter_map(|s| s.parse::<Currency>().ok())
+                .collect(),
+        };
         Ok(ListCurrenciesResult { currencies })
     }
 }
-
-// impl<'de> Deserialize<'de> for PriceSource {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-//     where
-//         D: Deserializer<'de>,
-//     {
-//         deser_fromstr(deserializer)
-//     }
-// }
-
-// impl Serialize for PriceSource {
-//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-//     where
-//         S: Serializer,
-//     {
-//         serializer.collect_str(&self)
-//     }
-// }

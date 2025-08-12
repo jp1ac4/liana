@@ -13,7 +13,9 @@ use crate::app::wallet::Wallet;
 use crate::daemon::Daemon;
 use crate::dir::LianaDirectory;
 use crate::services::fiat::api::PriceApi;
-use crate::services::fiat::{Currency, PriceClient, PriceSource, ALL_PRICE_SOURCES};
+use crate::services::fiat::client::PriceClient;
+use crate::services::fiat::currency::Currency;
+use crate::services::fiat::source::PriceSource;
 use crate::utils::now;
 
 /// Time to live of the list of available currencies for a given `PriceSource`.
@@ -63,8 +65,16 @@ impl FiatPriceSettingsState {
 }
 
 impl State for FiatPriceSettingsState {
-    fn view<'a>(&'a self, _cache: &'a Cache) -> liana_ui::widget::Element<'a, view::Message> {
-        todo!()
+    fn view<'a>(&'a self, cache: &'a Cache) -> liana_ui::widget::Element<'a, view::Message> {
+        view::settings::general::general_section(
+            cache,
+            &self.new_price_setting,
+            self.currencies_list
+                .get(&self.new_price_setting.source)
+                .map(|(_, list)| &list[..])
+                .unwrap_or(&[]),
+            self.error.as_ref(),
+        )
     }
 
     fn reload(
@@ -125,16 +135,16 @@ impl State for FiatPriceSettingsState {
             Message::Fiat(FiatMessage::ListCurrenciesResult(source, requested_at, res)) => {
                 match res {
                     Ok(list) => {
+                        if !list.currencies.contains(&self.new_price_setting.currency) {
+                            if let Some(curr) = list.currencies.first() {
+                                self.new_price_setting.currency = *curr;
+                            }
+                        }
                         if !self
                             .currencies_list
                             .get(&source)
                             .is_some_and(|(old, _)| *old > requested_at)
                         {
-                            if !list.currencies.contains(&self.new_price_setting.currency) {
-                                if let Some(curr) = list.currencies.first() {
-                                    self.new_price_setting.currency = *curr;
-                                }
-                            }
                             self.currencies_list
                                 .insert(source, (requested_at, list.currencies));
                         }
@@ -167,6 +177,12 @@ impl State for FiatPriceSettingsState {
                                 Message::Fiat(FiatMessage::ListCurrenciesResult(source, now, res))
                             },
                         );
+                    } else if let Some((_, list)) = self.currencies_list.get(&source) {
+                        if !list.contains(&self.new_price_setting.currency) {
+                            if let Some(curr) = list.first() {
+                                self.new_price_setting.currency = *curr;
+                            }
+                        }
                     }
                 }
                 Task::none()
