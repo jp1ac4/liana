@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::fiat::api::{GetPriceResult, ListCurrenciesResult, PriceApiError};
+use crate::services::fiat::api::{GetPriceResult, ListCurrenciesResult, PriceApiError};
 
 use super::Currency;
 

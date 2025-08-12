@@ -43,8 +43,8 @@ use crate::{
     },
     daemon::{embedded::EmbeddedDaemon, Daemon, DaemonBackend},
     dir::LianaDirectory,
-    fiat::{api::PriceApi, PriceClient},
     node::{bitcoind::Bitcoind, NodeType},
+    services::fiat::{api::PriceApi, PriceClient},
     utils::now,
 };
 

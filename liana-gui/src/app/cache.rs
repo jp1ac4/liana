@@ -4,7 +4,7 @@ use crate::{
         Daemon, DaemonError,
     },
     dir::LianaDirectory,
-    fiat::{
+    services::fiat::{
         api::{GetPriceResult, PriceApi, PriceApiError},
         client::PriceClient,
         Currency, PriceSource,

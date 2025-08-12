@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::fiat::{Currency, PriceSource};
+use crate::services::fiat::{Currency, PriceSource};
 use crate::utils::serde::{deser_fromstr, serialize_display};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

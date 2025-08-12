@@ -8,7 +8,7 @@ use crate::{
     app::{settings::SettingsError, wallet::WalletError},
     daemon::DaemonError,
     export::{self, RestoreBackupError},
-    fiat::api::PriceApiError,
+    services::fiat::api::PriceApiError,
 };
 
 #[derive(Debug)]

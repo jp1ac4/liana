@@ -9,8 +9,8 @@ use liana::miniscript::bitcoin::{
 use lianad::config::Config as DaemonConfig;
 
 use crate::app::cache::FiatPrice;
-use crate::fiat::api::{GetPriceResult, ListCurrenciesResult, PriceApiError};
-use crate::fiat::{Currency, PriceSource};
+use crate::services::fiat::api::{GetPriceResult, ListCurrenciesResult, PriceApiError};
+use crate::services::fiat::{Currency, PriceSource};
 use crate::{
     app::{cache::DaemonCache, error::Error, view, wallet::Wallet},
     daemon::model::*,

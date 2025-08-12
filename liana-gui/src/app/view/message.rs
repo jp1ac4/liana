@@ -1,8 +1,8 @@
 use crate::{
     app::menu::Menu,
     export::ImportExportMessage,
-    fiat::{Currency, PriceSource},
     node::bitcoind::RpcAuthType,
+    services::fiat::{Currency, PriceSource},
 };
 use liana::miniscript::bitcoin::{bip32::Fingerprint, Address, OutPoint};
 

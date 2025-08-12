@@ -5,7 +5,6 @@ pub mod delete;
 pub mod dir;
 pub mod download;
 pub mod export;
-pub mod fiat;
 pub mod gui;
 pub mod help;
 pub mod hw;

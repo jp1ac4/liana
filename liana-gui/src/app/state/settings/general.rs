@@ -12,8 +12,8 @@ use crate::app::view;
 use crate::app::wallet::Wallet;
 use crate::daemon::Daemon;
 use crate::dir::LianaDirectory;
-use crate::fiat::api::PriceApi;
-use crate::fiat::{Currency, PriceClient, PriceSource, ALL_PRICE_SOURCES};
+use crate::services::fiat::api::PriceApi;
+use crate::services::fiat::{Currency, PriceClient, PriceSource, ALL_PRICE_SOURCES};
 use crate::utils::now;
 
 /// Time to live of the list of available currencies for a given `PriceSource`.

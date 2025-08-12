@@ -34,7 +34,6 @@ use crate::{
     daemon::{Daemon, DaemonError},
     delete,
     dir::LianaDirectory,
-    fiat::currency,
     hw::{HardwareWalletConfig, HardwareWallets},
     services::{
         self,
@@ -46,6 +45,7 @@ use crate::{
             },
             cache::update_connect_cache,
         },
+        fiat::currency,
     },
     signer::Signer,
 };
@@ -653,7 +653,7 @@ pub async fn create_remote_wallet(
         fiat_price: Some(PriceSetting {
             is_enabled: true,
             currency: currency::Currency::default(),
-            source: crate::fiat::source::PriceSource::CoinGecko,
+            source: crate::services::fiat::source::PriceSource::CoinGecko,
         }),
     };
     update_settings_file(&network_datadir, |mut settings| {
@@ -738,7 +738,7 @@ pub async fn import_remote_wallet(
         fiat_price: Some(PriceSetting {
             is_enabled: true,
             currency: currency::Currency::default(),
-            source: crate::fiat::source::PriceSource::CoinGecko,
+            source: crate::services::fiat::source::PriceSource::CoinGecko,
         }),
     };
     update_settings_file(&network_datadir, |mut settings| {
