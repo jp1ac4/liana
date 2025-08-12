@@ -2,7 +2,7 @@ use super::currency::Currency;
 
 use async_trait::async_trait;
 
-use crate::http::NotSuccessResponseInfo;
+use crate::services::http::NotSuccessResponseInfo;
 
 #[derive(Debug, Clone)]
 pub struct GetPriceResult {

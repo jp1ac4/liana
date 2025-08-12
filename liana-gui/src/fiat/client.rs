@@ -4,7 +4,7 @@ use super::source::PriceSource;
 
 use async_trait::async_trait;
 
-use crate::http::ResponseExt;
+use crate::services::http::ResponseExt;
 
 pub struct PriceClient<C> {
     inner: C,
