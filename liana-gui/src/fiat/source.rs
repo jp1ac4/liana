@@ -35,12 +35,6 @@ impl FromStr for PriceSource {
     }
 }
 
-// #[derive(Debug)]
-// pub enum ParseDataError {
-//     UnexpectedType,
-//     MissingKey(String),
-// }
-
 impl PriceSource {
     pub fn get_price_url(&self, currency: Currency) -> String {
         match self {

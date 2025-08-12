@@ -153,6 +153,7 @@ pub struct App {
     wallet: Arc<Wallet>,
     daemon: Arc<dyn Daemon + Sync + Send>,
     internal_bitcoind: Option<Bitcoind>,
+
     panels: Panels,
 }
 
