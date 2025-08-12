@@ -44,22 +44,12 @@ impl PriceApi for PriceClient<reqwest::Client> {
     async fn get_price(&self, currency: Currency) -> Result<GetPriceResult, PriceApiError> {
         let url = self.source.get_price_url(currency);
         let data = get_data(&self.inner, &url).await?;
-        let (value, updated_at) = self
-            .source
-            .parse_price_data(currency, &data)
-            .map_err(PriceApiError::CannotParseData)?;
-
-        Ok(GetPriceResult { value, updated_at })
+        self.source.parse_price_data(currency, &data)
     }
 
     async fn list_currencies(&self) -> Result<ListCurrenciesResult, PriceApiError> {
         let url = self.source.list_currencies_url();
         let data = get_data(&self.inner, &url).await?;
-        let currencies = self
-            .source
-            .parse_currencies_data(&data)
-            .map_err(PriceApiError::CannotParseData)?;
-
-        Ok(ListCurrenciesResult { currencies })
+        self.source.parse_currencies_data(&data)
     }
 }

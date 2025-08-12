@@ -16,13 +16,8 @@ use crate::fiat::api::PriceApi;
 use crate::fiat::{Currency, PriceClient, PriceSource, ALL_PRICE_SOURCES};
 use crate::utils::now;
 
-fn price_setting_from_wallet(wallet: &Wallet) -> PriceSetting {
-    wallet
-        .fiat_price_setting
-        .as_ref()
-        .cloned()
-        .unwrap_or_default()
-}
+/// Time to live of the list of available currencies for a given `PriceSource`.
+const CURRENCIES_LIST_TTL_SECS: u64 = 3_600; // 1 hour
 
 async fn update_price_setting(
     data_dir: LianaDirectory,
@@ -51,61 +46,17 @@ async fn update_price_setting(
 pub struct FiatPriceSettingsState {
     wallet: Arc<Wallet>,
     new_price_setting: PriceSetting,
-    // is_enabled: bool,
-    // source: PriceSource,
-    // currency: Currency,
     currencies_list: HashMap<PriceSource, (u64, Vec<Currency>)>,
-    // prices_cache: HashMap<PriceSource, HashMap<Currency, u64>>,
     error: Option<Error>,
 }
 
 impl FiatPriceSettingsState {
     pub fn new(wallet: Arc<Wallet>) -> Self {
-        // let (is_enabled, source, currency) = if let Some(price_setting) = &wallet.fiat_price_setting
-        // {
-        //     (
-        //         price_setting.is_enabled,
-        //         price_setting.source,
-        //         price_setting.currency,
-        //     )
-        // } else {
-        //     (false, PriceSource::default(), Currency::default())
-        // };
-        // assert!(
-        //     ALL_PRICE_SOURCES.contains(&source),
-        //     "Source {} is not in the list of available sources",
-        //     source,
-        // );
-        let new_price_setting = price_setting_from_wallet(&wallet);
-        let currencies_list = ALL_PRICE_SOURCES
-            .iter()
-            .map(|s| {
-                (
-                    *s,
-                    (
-                        0,
-                        if s == &new_price_setting.source {
-                            vec![new_price_setting.currency]
-                        } else {
-                            vec![]
-                        },
-                    ),
-                )
-            })
-            .collect();
-        // let prices_cache = ALL_PRICE_SOURCES
-        //     .iter()
-        //     .map(|s| (*s, HashMap::new()))
-        //     .collect();
+        let new_price_setting = wallet.effective_fiat_price_setting();
         FiatPriceSettingsState {
             wallet,
-            // is_enabled,
-            // source,
-            // currency,
             new_price_setting,
-            currencies_list,
-
-            // prices_cache,
+            currencies_list: HashMap::new(),
             error: None,
         }
     }
@@ -121,7 +72,7 @@ impl State for FiatPriceSettingsState {
         _daemon: Arc<dyn Daemon + Sync + Send>,
         wallet: Arc<Wallet>,
     ) -> iced::Task<Message> {
-        self.new_price_setting = price_setting_from_wallet(&wallet);
+        self.new_price_setting = wallet.effective_fiat_price_setting();
         self.wallet = wallet.clone();
         if self.new_price_setting.is_enabled {
             let source = self.new_price_setting.source;
@@ -147,7 +98,7 @@ impl State for FiatPriceSettingsState {
                 match res {
                     Ok(wallet) => {
                         self.wallet = wallet;
-                        self.new_price_setting = price_setting_from_wallet(&self.wallet);
+                        self.new_price_setting = self.wallet.effective_fiat_price_setting();
                         self.error = None;
                     }
                     Err(e) => {
@@ -190,27 +141,6 @@ impl State for FiatPriceSettingsState {
                         return Task::perform(async move {}, |_| {
                             Message::Fiat(FiatMessage::SaveChanges)
                         });
-
-                        // TODO: update settings file & wallet with new price setting.
-
-                        // if self.new_price_setting.is_enabled {
-                        //     let now = now().as_secs();
-                        //     if !self
-                        //         .prices_cache
-                        //         .get(&source)
-                        //         .and_then(|curr_map| curr_map.get(&self.new_price_setting.currency))
-                        //         .is_some_and(|timestamp| now.saturating_sub(*timestamp) < 100)
-                        //     {
-                        //         let source = self.new_price_setting.source;
-                        //         let currency = self.new_price_setting.currency;
-                        //         return Task::perform(
-                        //             async move { (source, currency) },
-                        //             |(source, currency)| {
-                        //                 Message::Fiat(FiatMessage::GetPrice(source, currency))
-                        //             },
-                        //         );
-                        //     }
-                        // }
                     }
                     Err(e) => {
                         self.error = Some(e);
@@ -218,29 +148,12 @@ impl State for FiatPriceSettingsState {
                 }
                 Task::none()
             }
-            // Message::Fiat(FiatMessage::GetPrice(source, currency)) => {
-            //     if self.new_price_setting.is_enabled {
-            //         return Task::perform(
-            //             async move { cache::get_fiat_price(source, currency).await },
-            //             move |res| {
-            //                 Message::Fiat(FiatMessage::GetPriceResult(res))
-            //             },
-            //         );
-            //     }
-            //     Task::none()
-            // }
             Message::Fiat(FiatMessage::UpdateCurrencies(source)) => {
                 if self.new_price_setting.is_enabled {
-                    // Do not get currencies list if it has already been set for this source recently.
-                    const CURRENCIES_LIST_TTL_SECS: u64 = 3_600; // 1 hour
                     let now = now().as_secs();
-                    if self
-                        .currencies_list
-                        .get(&source)
-                        .is_some_and(|(timestamp, _)| {
-                            now.saturating_sub(*timestamp) > CURRENCIES_LIST_TTL_SECS
-                        })
-                    {
+                    if !self.currencies_list.get(&source).is_some_and(|(old, _)| {
+                        now.saturating_sub(*old) <= CURRENCIES_LIST_TTL_SECS
+                    }) {
                         return Task::perform(
                             async move {
                                 let client = PriceClient::default_from_source(source);

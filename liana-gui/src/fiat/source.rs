@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use crate::fiat::api::{GetPriceResult, ListCurrenciesResult, PriceApiError};
+
 use super::Currency;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -63,36 +65,44 @@ impl PriceSource {
         &self,
         currency: Currency,
         data: &serde_json::Value,
-    ) -> Result<(u64, Option<u64>), String> {
-        match self {
+    ) -> Result<GetPriceResult, PriceApiError> {
+        let (value, updated_at) = match self {
             PriceSource::MempoolSpace => {
                 let value = data
                     .get(currency.to_string())
                     .and_then(|curr| curr.as_u64())
-                    .ok_or("error parsing price")?;
+                    .ok_or(PriceApiError::CannotParseData("price".to_string()))?;
                 let updated_at = data.get("timestamp").and_then(|t| t.as_u64());
-                Ok((value, updated_at))
+                (value, updated_at)
             }
             PriceSource::CoinGecko => {
-                let btc = data.get("btc").ok_or("missing key 'btc'")?;
+                let btc = data.get("btc").ok_or(PriceApiError::CannotParseData(
+                    "missing key 'btc'".to_string(),
+                ))?;
                 let value = btc
                     .get(currency.to_string().to_lowercase())
                     .and_then(|curr| curr.as_u64())
-                    .ok_or("error parsing price")?;
+                    .ok_or(PriceApiError::CannotParseData("price".to_string()))?;
                 let updated_at = btc.get("last_updated_at").and_then(|t| t.as_u64());
-                Ok((value, updated_at))
+                (value, updated_at)
             }
-        }
+        };
+        Ok(GetPriceResult { value, updated_at })
     }
 
-    pub fn parse_currencies_data(&self, data: &serde_json::Value) -> Result<Vec<Currency>, String> {
-        let currencies = data
+    pub fn parse_currencies_data(
+        &self,
+        data: &serde_json::Value,
+    ) -> Result<ListCurrenciesResult, PriceApiError> {
+        let currencies: Vec<_> = data
             .as_object()
-            .ok_or("data is not object")?
+            .ok_or(PriceApiError::CannotParseData(
+                "data is not object".to_string(),
+            ))?
             .keys()
             .filter_map(|k| k.parse::<Currency>().ok())
             .collect();
-        Ok(currencies)
+        Ok(ListCurrenciesResult { currencies })
     }
 }
 
