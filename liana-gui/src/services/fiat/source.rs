@@ -1,8 +1,7 @@
 use std::str::FromStr;
 
-use crate::services::fiat::api::{GetPriceResult, ListCurrenciesResult, PriceApiError};
-
-use super::Currency;
+use super::api::{GetPriceResult, ListCurrenciesResult, PriceApiError};
+use super::currency::Currency;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum PriceSource {
@@ -36,22 +35,17 @@ impl FromStr for PriceSource {
 }
 
 impl PriceSource {
-    pub fn get_price_url(&self, currency: Currency) -> String {
+    pub fn get_price_url(&self, _currency: Currency) -> String {
         match self {
-            PriceSource::MempoolSpace => "https://mempool.space/api/v1/prices".to_string(),
-            PriceSource::CoinGecko => format!(
-                "https://api.coingecko.com/api/v3/simple/price?symbols=btc&vs_currencies={}&include_last_updated_at=true",
-                currency
-            ),
+            Self::CoinGecko => "https://api.coingecko.com/api/v3/exchange_rates".to_string(),
+            Self::MempoolSpace => "https://mempool.space/api/v1/prices".to_string(),
         }
     }
 
     pub fn list_currencies_url(&self) -> String {
         match self {
-            PriceSource::MempoolSpace => "https://mempool.space/api/v1/prices".to_string(),
-            PriceSource::CoinGecko => {
-                "https://api.coingecko.com/api/v3/simple/supported_vs_currencies".to_string()
-            }
+            Self::CoinGecko => "https://api.coingecko.com/api/v3/exchange_rates".to_string(),
+            Self::MempoolSpace => "https://mempool.space/api/v1/prices".to_string(),
         }
     }
 
@@ -62,15 +56,12 @@ impl PriceSource {
     ) -> Result<GetPriceResult, PriceApiError> {
         let (value, updated_at) = match self {
             Self::CoinGecko => {
-                let btc = data.get("btc").ok_or(PriceApiError::CannotParseData(
-                    "missing key 'btc'".to_string(),
-                ))?;
-                let value = btc
-                    .get(currency.to_string().to_lowercase())
-                    .and_then(|curr| curr.as_u64())
+                let value = data
+                    .get("rates")
+                    .and_then(|rates| rates.get(currency.to_string().to_lowercase()))
+                    .and_then(|curr| curr.as_f64().map(|f| f as u64))
                     .ok_or(PriceApiError::CannotParseData("price".to_string()))?;
-                let updated_at = btc.get("last_updated_at").and_then(|t| t.as_u64());
-                (value, updated_at)
+                (value, None)
             }
             Self::MempoolSpace => {
                 let value = data
@@ -91,12 +82,13 @@ impl PriceSource {
         println!("parsing data: {:?}", data);
         let currencies: Vec<_> = match self {
             Self::CoinGecko => data
-                .as_array()
+                .get("rates")
+                .and_then(|rates| rates.as_object())
                 .ok_or(PriceApiError::CannotParseData(
-                    "data is not array".to_string(),
+                    "data is not object".to_string(),
                 ))?
-                .iter()
-                .filter_map(|v| v.as_str().and_then(|s| s.parse::<Currency>().ok()))
+                .keys()
+                .filter_map(|v| v.parse::<Currency>().ok())
                 .collect(),
             Self::MempoolSpace => data
                 .as_object()

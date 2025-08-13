@@ -1,4 +1,5 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use iced::Task;
 use liana::miniscript::bitcoin::Network;
@@ -6,7 +7,8 @@ use liana::miniscript::bitcoin::Network;
 use crate::app::cache::Cache;
 use crate::app::error::Error;
 use crate::app::message::{FiatMessage, Message};
-use crate::app::settings::{fiat::PriceSetting, update_settings_file};
+use crate::app::settings::fiat::PriceSetting;
+use crate::app::settings::update_settings_file;
 use crate::app::state::State;
 use crate::app::view;
 use crate::app::wallet::Wallet;
