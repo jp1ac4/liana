@@ -28,12 +28,12 @@ macro_rules! currency_enum {
 }
 
 currency_enum!(Currency {
-    USD, // first variant is the default
+    USD, // macro sets first variant as the default
     AED,
     ARS,
     AUD,
     BDT,
-    BHT,
+    BHD,
     BMD,
     BRL,
     CAD,
@@ -53,28 +53,25 @@ currency_enum!(Currency {
     JPY,
     KRW,
     KWD,
+    LKR,
+    MMK,
+    MXN,
+    MYR,
+    NGN,
+    NOK,
+    NZD,
+    PHP,
+    PKR,
+    PLN,
+    RUB,
+    SAR,
+    SEK,
+    SGD,
+    THB,
+    TRY,
+    TWD,
+    UAH,
+    VEF,
+    VND,
+    ZAR,
 });
-
-// impl Default for Currency {
-//     fn default() -> Self {
-//         Currency::USD
-//     }
-// }
-
-// impl<'de> Deserialize<'de> for Currency {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-//     where
-//         D: Deserializer<'de>,
-//     {
-//         deser_fromstr(deserializer)
-//     }
-// }
-
-// impl Serialize for Currency {
-//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-//     where
-//         S: Serializer,
-//     {
-//         serializer.collect_str(&self)
-//     }
-// }

@@ -14,7 +14,7 @@ use liana::miniscript::bitcoin::Network;
 use lianad::commands::CoinStatus;
 use std::sync::Arc;
 
-pub const FIAT_PRICE_UPDATE_INTERVAL_SECS: u64 = 300;
+pub const FIAT_PRICE_UPDATE_INTERVAL_SECS: u64 = 30; //FIXME
 
 #[derive(Debug, Clone)]
 pub struct Cache {

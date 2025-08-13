@@ -114,6 +114,8 @@ impl State for FiatPriceSettingsState {
                         self.wallet = wallet;
                         self.new_price_setting = self.wallet.effective_fiat_price_setting();
                         self.error = None;
+                        println!("Fiat price setting updated: {}", now().as_secs());
+                        return Task::perform(async move {}, |_| Message::FiatPriceTick);
                     }
                     Err(e) => {
                         self.error = Some(e);
@@ -134,7 +136,6 @@ impl State for FiatPriceSettingsState {
                         Message::WalletUpdated,
                     );
                 }
-                // }
                 Task::none()
             }
             Message::Fiat(FiatMessage::ValidateCurrencySetting) => {
@@ -157,11 +158,6 @@ impl State for FiatPriceSettingsState {
             Message::Fiat(FiatMessage::ListCurrenciesResult(source, requested_at, res)) => {
                 match res {
                     Ok(list) => {
-                        // if !list.currencies.contains(&self.new_price_setting.currency) {
-                        //     if let Some(curr) = list.currencies.first() {
-                        //         self.new_price_setting.currency = *curr;
-                        //     }
-                        // }
                         if !self
                             .currencies_list
                             .get(&source)
