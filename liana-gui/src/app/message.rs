@@ -80,4 +80,5 @@ pub enum FiatMessage {
     UpdateCurrencies(PriceSource),
     ListCurrenciesResult(PriceSource, u64, Result<ListCurrenciesResult, Error>),
     SaveChanges,
+    ValidateCurrencySetting,
 }

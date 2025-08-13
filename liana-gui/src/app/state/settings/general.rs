@@ -92,6 +92,10 @@ impl State for FiatPriceSettingsState {
         } else if self.wallet.fiat_price_setting.is_none() {
             // If the wallet does not have a fiat price setting, save the default disabled setting
             // to indicate that the user has seen the setting option (and a notification is no longer required).
+            tracing::info!(
+                "Fiat price setting is missing for wallet '{}'. Saving default setting.",
+                self.wallet.id()
+            );
             return Task::perform(async move {}, |_| Message::Fiat(FiatMessage::SaveChanges));
         }
         Task::none()
@@ -130,16 +134,34 @@ impl State for FiatPriceSettingsState {
                         Message::WalletUpdated,
                     );
                 }
+                // }
+                Task::none()
+            }
+            Message::Fiat(FiatMessage::ValidateCurrencySetting) => {
+                if let Some((_, list)) = self.currencies_list.get(&self.new_price_setting.source) {
+                    if !list.contains(&self.new_price_setting.currency) {
+                        if list.contains(&Currency::default()) {
+                            self.new_price_setting.currency = Currency::default();
+                        } else if let Some(curr) = list.first() {
+                            self.new_price_setting.currency = *curr;
+                        } else {
+                            return Task::none();
+                        }
+                    }
+                    return Task::perform(async move {}, |_| {
+                        Message::Fiat(FiatMessage::SaveChanges)
+                    });
+                }
                 Task::none()
             }
             Message::Fiat(FiatMessage::ListCurrenciesResult(source, requested_at, res)) => {
                 match res {
                     Ok(list) => {
-                        if !list.currencies.contains(&self.new_price_setting.currency) {
-                            if let Some(curr) = list.currencies.first() {
-                                self.new_price_setting.currency = *curr;
-                            }
-                        }
+                        // if !list.currencies.contains(&self.new_price_setting.currency) {
+                        //     if let Some(curr) = list.currencies.first() {
+                        //         self.new_price_setting.currency = *curr;
+                        //     }
+                        // }
                         if !self
                             .currencies_list
                             .get(&source)
@@ -149,7 +171,7 @@ impl State for FiatPriceSettingsState {
                                 .insert(source, (requested_at, list.currencies));
                         }
                         return Task::perform(async move {}, |_| {
-                            Message::Fiat(FiatMessage::SaveChanges)
+                            Message::Fiat(FiatMessage::ValidateCurrencySetting)
                         });
                     }
                     Err(e) => {
@@ -161,27 +183,28 @@ impl State for FiatPriceSettingsState {
             Message::Fiat(FiatMessage::UpdateCurrencies(source)) => {
                 if self.new_price_setting.is_enabled {
                     let now = now().as_secs();
-                    if !self.currencies_list.get(&source).is_some_and(|(old, _)| {
-                        now.saturating_sub(*old) <= CURRENCIES_LIST_TTL_SECS
-                    }) {
-                        return Task::perform(
-                            async move {
-                                let client = PriceClient::default_from_source(source);
-                                (
-                                    source,
-                                    now,
-                                    client.list_currencies().await.map_err(Error::FiatPrice),
-                                )
-                            },
-                            |(source, now, res)| {
-                                Message::Fiat(FiatMessage::ListCurrenciesResult(source, now, res))
-                            },
-                        );
-                    } else if let Some((_, list)) = self.currencies_list.get(&source) {
-                        if !list.contains(&self.new_price_setting.currency) {
-                            if let Some(curr) = list.first() {
-                                self.new_price_setting.currency = *curr;
-                            }
+                    match self.currencies_list.get(&source) {
+                        Some((old, _)) if now.saturating_sub(*old) <= CURRENCIES_LIST_TTL_SECS => {
+                            return Task::perform(async move {}, |_| {
+                                Message::Fiat(FiatMessage::ValidateCurrencySetting)
+                            });
+                        }
+                        _ => {
+                            return Task::perform(
+                                async move {
+                                    let client = PriceClient::default_from_source(source);
+                                    (
+                                        source,
+                                        now,
+                                        client.list_currencies().await.map_err(Error::FiatPrice),
+                                    )
+                                },
+                                |(source, now, res)| {
+                                    Message::Fiat(FiatMessage::ListCurrenciesResult(
+                                        source, now, res,
+                                    ))
+                                },
+                            );
                         }
                     }
                 }
@@ -192,10 +215,10 @@ impl State for FiatPriceSettingsState {
                     view::FiatMessage::Enable(is_enabled) => {
                         self.new_price_setting.is_enabled = is_enabled;
                         if self.new_price_setting.is_enabled {
-                            return Task::perform(
-                                async move { PriceSource::default() },
-                                |source| Message::Fiat(FiatMessage::UpdateCurrencies(source)),
-                            );
+                            let source = self.new_price_setting.source;
+                            return Task::perform(async move { source }, |source| {
+                                Message::Fiat(FiatMessage::UpdateCurrencies(source))
+                            });
                         } else {
                             return Task::perform(async move {}, |_| {
                                 Message::Fiat(FiatMessage::SaveChanges)
@@ -214,7 +237,7 @@ impl State for FiatPriceSettingsState {
                     view::FiatMessage::CurrencyEdited(currency) => {
                         self.new_price_setting.currency = currency;
                         return Task::perform(async move {}, |_| {
-                            Message::Fiat(FiatMessage::SaveChanges)
+                            Message::Fiat(FiatMessage::ValidateCurrencySetting)
                         });
                     }
                 }
