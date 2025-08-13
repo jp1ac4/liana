@@ -21,7 +21,7 @@ use crate::{
 #[derive(Debug)]
 pub enum Message {
     Tick,
-    FiatPriceTick,
+    // FiatPriceTick,
     UpdateDaemonCache(Result<DaemonCache, Error>),
     CacheUpdated,
     GetFiatPrice,

@@ -189,7 +189,7 @@ impl App {
             .is_some_and(|sett| sett.is_enabled)
         {
             // If the fiat price setting is enabled, we should fetch the fiat price.
-            cmds.push(Task::perform(async move {}, |_| Message::FiatPriceTick));
+            cmds.push(Task::perform(async move {}, |_| Message::GetFiatPrice));
         }
         (
             Self {
@@ -330,47 +330,21 @@ impl App {
             .fiat_price_setting
             .as_ref()
             .filter(|sett| sett.is_enabled)
-        // .map(|sett| sett.is_enabled)
-        // .unwrap_or_default()
         {
+            // Force a new subscription to be created if the source or currency changes. This way, the first tick
+            // will occur `FIAT_PRICE_UPDATE_INTERVAL_SECS` seconds after the initial cache entry for this pair.
+            // (The initial entry is created by a direct task rather than this subscription.)
             if self
                 .cache
                 .fiat_price
                 .as_ref()
                 .is_some_and(|price| price.source == sett.source && price.currency == sett.currency)
             {
-                println!("adding sub with fiat price update interval");
                 subs.push(
                     time::every(Duration::from_secs(cache::FIAT_PRICE_UPDATE_INTERVAL_SECS))
-                        .map(|_| Message::FiatPriceTick),
+                        .map(|_| Message::GetFiatPrice),
                 )
-            } else {
-                println!("skipping sub");
             }
-            // println!("using fiat price update interval");
-            // subs.push(
-            //     time::every(Duration::from_secs(
-            //         cache::FIAT_PRICE_UPDATE_INTERVAL_SECS
-
-            //         // match self.cache.fiat_price {
-            //         //     Some(ref price)// if price.source == sett.source && price.currency == sett.currency
-            //         //     // && price.requested_at.saturating_add(cache::FIAT_PRICE_UPDATE_INTERVAL_SECS) >= now().as_secs()
-            //         //      => {
-            //         //         println!("using fiat price update interval");
-            //         //         // If we already have a price for this source and currency, use the variable.
-            //         //         cache::FIAT_PRICE_UPDATE_INTERVAL_SECS
-            //         //     }
-            //         //     _ => {
-            //         //         println!("using 1 as update interval");
-            //         //         2 // Otherwise, get it now.
-            //         //     }
-            //         // }
-            //     ))
-            //     // time::every(Duration::from_secs(cache::FIAT_PRICE_UPDATE_INTERVAL_SECS))
-            //         // .map(|_| Message::GetPriceResult(sett.source, sett.currency, GetPriceResult::default())),
-            //         // .map(|_| Message::Fiat(FiatMessage::GetPriceResult(GetPriceResult::default()))),}))
-            //     .map(|_| Message::FiatPriceTick),
-            // );
         }
         Subscription::batch(subs)
     }
@@ -414,7 +388,7 @@ impl App {
                     Message::UpdateDaemonCache,
                 )
             }
-            Message::FiatPriceTick => {
+            Message::GetFiatPrice => {
                 if let Some(price_setting) = self
                     .wallet
                     .fiat_price_setting
@@ -422,83 +396,25 @@ impl App {
                     .filter(|sett| sett.is_enabled)
                     .cloned()
                 {
-                    // println!(
-                    //     "getting fiat price for {} from {} at {}",
-                    //     price_setting.currency, price_setting.source, now().as_secs()
-                    // );
-                    // return Task::perform(
-                    //     async move {
-                    //         cache::get_fiat_price(
-                    //             price_setting.source,
-                    //             price_setting.currency,
-                    //         )
-                    //         .await
-                    //     },
-                    //     |fiat_price| Message::Fiat(FiatMessage::GetPriceResult(fiat_price)),
-                    // );
-                    match self.cache.fiat_price {
-                        // Some(ref price)
-                        //     if price.source == price_setting.source
-                        //         && price.currency == price_setting.currency
-                        //         && price.price_res.is_ok()
-                        //         && price.requested_at + cache::FIAT_PRICE_UPDATE_INTERVAL_SECS
-                        //             > now().as_secs() =>
-                        // {
-                        //     println!(
-                        //         "skipping fiat price update for {} from {}",
-                        //         price.currency, price.source
-                        //     );
-                        //     return Task::none();
-                        // }
-                        _ => {
-                            println!(
-                                "getting fiat price for {} from {} at {}",
-                                price_setting.currency,
-                                price_setting.source,
-                                now().as_secs()
-                            );
-                            return Task::perform(
-                                async move {
-                                    cache::get_fiat_price(
-                                        price_setting.source,
-                                        price_setting.currency,
-                                    )
-                                    .await
-                                },
-                                |fiat_price| Message::Fiat(FiatMessage::GetPriceResult(fiat_price)),
-                            );
-                        }
-                    }
+                    tracing::debug!(
+                        "Getting fiat price in {} from {}",
+                        price_setting.currency,
+                        price_setting.source,
+                    );
+                    return Task::perform(
+                        async move {
+                            cache::get_fiat_price(price_setting.source, price_setting.currency)
+                                .await
+                        },
+                        |fiat_price| Message::Fiat(FiatMessage::GetPriceResult(fiat_price)),
+                    );
                 }
                 Task::none()
             }
             Message::Fiat(FiatMessage::GetPriceResult(fiat_price)) => {
                 self.cache.fiat_price = Some(fiat_price);
-                return Task::perform(async {}, |_| Message::CacheUpdated);
+                Task::perform(async {}, |_| Message::CacheUpdated)
             }
-            // Message::GetPriceResult(source, currency, price_res) => {
-            //     self.cache.fiat_price = Some(FiatPrice {
-            //         price_res,
-            //         source,
-            //         currency,
-            //         requested_at: now().as_secs(),
-            //     });
-            //     Task::perform(async {}, |_| Message::CacheUpdated)
-            //     // match res {
-            //     //     Ok(price) => {
-            //     //         println!("fiat price for {} from {}: {:?}", currency, source, price);
-            //     //         self.cache.fiat_price = Some(FiatPrice {
-            //     //             price,
-            //     //             source,
-            //     //             currency,
-            //     //             requested_at: now().as_secs(),
-            //     //         });
-            //     //         return Task::perform(async {}, |_| Message::CacheUpdated);
-            //     //     }
-            //     //     Err(e) => tracing::error!("Failed to update fiat price: {:?}", e),
-            //     // }
-            //     // Task::none()
-            // }
             Message::UpdateDaemonCache(res) => {
                 match res {
                     Ok(daemon_cache) => {
