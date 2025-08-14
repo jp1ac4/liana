@@ -185,7 +185,9 @@ impl App {
             .is_some_and(|sett| sett.is_enabled)
         {
             // If the fiat price setting is enabled, we should fetch the fiat price.
-            cmds.push(Task::perform(async move {}, |_| Message::GetFiatPrice));
+            cmds.push(Task::perform(async move {}, |_| {
+                Message::Fiat(FiatMessage::GetPrice)
+            }));
         }
         (
             Self {
@@ -338,7 +340,7 @@ impl App {
             {
                 subs.push(
                     time::every(Duration::from_secs(cache::FIAT_PRICE_UPDATE_INTERVAL_SECS))
-                        .map(|_| Message::GetFiatPrice),
+                        .map(|_| Message::Fiat(FiatMessage::GetPrice)),
                 )
             }
         }
@@ -384,7 +386,7 @@ impl App {
                     Message::UpdateDaemonCache,
                 )
             }
-            Message::GetFiatPrice => {
+            Message::Fiat(FiatMessage::GetPrice) => {
                 if let Some(price_setting) = self
                     .wallet
                     .fiat_price_setting

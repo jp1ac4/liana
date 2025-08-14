@@ -9,8 +9,8 @@ use liana::miniscript::bitcoin::{
 use lianad::config::Config as DaemonConfig;
 
 use crate::app::cache::FiatPrice;
-use crate::services::fiat::api::{GetPriceResult, ListCurrenciesResult, PriceApiError};
-use crate::services::fiat::{Currency, PriceSource};
+use crate::services::fiat::api::ListCurrenciesResult;
+use crate::services::fiat::source::PriceSource;
 use crate::{
     app::{cache::DaemonCache, error::Error, view, wallet::Wallet},
     daemon::model::*,
@@ -21,12 +21,9 @@ use crate::{
 #[derive(Debug)]
 pub enum Message {
     Tick,
-    // FiatPriceTick,
     UpdateDaemonCache(Result<DaemonCache, Error>),
     CacheUpdated,
-    GetFiatPrice,
     Fiat(FiatMessage),
-    UpdateFiatPrice(PriceSource, Currency, Result<GetPriceResult, PriceApiError>),
     UpdatePanelCache(/* is current panel */ bool),
     View(view::Message),
     LoadDaemonConfig(Box<DaemonConfig>),
@@ -63,7 +60,6 @@ pub enum Message {
     BroadcastModal(Result<HashSet<Txid>, Error>),
     RbfModal(Box<HistoryTransaction>, bool, Result<HashSet<Txid>, Error>),
     Export(ImportExportMessage),
-    // MaybeUpdateFiatPrice,
 }
 
 impl From<ImportExportMessage> for Message {
@@ -74,8 +70,7 @@ impl From<ImportExportMessage> for Message {
 
 #[derive(Debug)]
 pub enum FiatMessage {
-    PriceTick,
-    GetPrice(PriceSource, Currency),
+    GetPrice,
     GetPriceResult(FiatPrice),
     UpdateCurrencies(PriceSource),
     ListCurrenciesResult(PriceSource, u64, Result<ListCurrenciesResult, Error>),

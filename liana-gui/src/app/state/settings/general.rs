@@ -156,7 +156,9 @@ impl FiatPriceSettingsState {
                         self.new_price_setting = self.wallet.effective_fiat_price_setting();
                         self.error = None;
                         println!("Fiat price setting updated: {}", now().as_secs());
-                        return Task::perform(async move {}, |_| Message::GetFiatPrice);
+                        return Task::perform(async move {}, |_| {
+                            Message::Fiat(FiatMessage::GetPrice)
+                        });
                     }
                     Err(e) => {
                         self.error = Some(e);
