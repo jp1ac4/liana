@@ -3,6 +3,71 @@ use iced::Color;
 
 use crate::{color, component::text::*, widget::*};
 
+// #[derive(Debug, Clone)]
+pub enum WalletAmount {
+    Btc(Amount),
+    Fiat(u64, String),
+}
+
+// impl From<Amount> for WalletAmount {
+//     fn from(amount: Amount) -> Self {
+//         WalletAmount::Btc(amount)
+//     }
+// }
+
+// impl From<u64> for WalletAmount {
+//     fn from(value: u64, unit: &str) -> Self {
+//         WalletAmount::Fiat(value, unit.to_string())
+//     }
+// }
+
+impl WalletAmount {
+    fn separator(&self) -> &'static str {
+        match self {
+            Self::Btc(_) => " ",
+            Self::Fiat(..) => ",",
+        }
+    }
+
+    fn unit(&self) -> &str {
+        match self {
+            Self::Btc(_) => "BTC",
+            Self::Fiat(_, unit) => unit,
+        }
+    }
+
+    fn num_decimals(&self) -> usize {
+        match self {
+            Self::Btc(_) => 8,     // Bitcoin has 8 decimal places
+            Self::Fiat(_, _) => 2, // Fiat currencies typically have 2 decimal places
+        }
+    }
+
+    pub fn as_string(&self) -> String {
+        let amount = match self {
+            Self::Btc(amount) => {
+                // Convert the amount to a string with 8 decimal places.
+                amount.to_btc().to_string()
+            }
+            Self::Fiat(value, _) => value.to_string(),
+        };
+
+        // Reformat the integer portion of the amount with space separation.
+        let (integer, fraction) = match amount.split_once('.') {
+            Some((i, f)) => (i, f),
+            None => (amount.as_str(), "00000000"),
+        };
+
+        let integer = format_amount_number_part(integer, &self.separator());
+        let fraction = format_amount_number_part(
+            &format!("{:0<width$}", fraction, width = self.num_decimals()),
+            &self.separator(),
+        );
+
+        format!("{integer}.{fraction}")
+    }
+}
+
 /// Amount with default size and colors.
 pub fn amount<'a, T: 'a>(a: &Amount) -> Row<'a, T> {
     amount_with_size(a, P1_SIZE)
@@ -27,11 +92,13 @@ pub fn amount_with_size_and_colors<'a, T: 'a>(
     color_before: Color,
     color_after: Option<Color>,
 ) -> Row<'a, T> {
-    render_amount(amount_as_string(*a), size, color_before, color_after)
+    let wallet_amt = WalletAmount::Btc(*a);
+    render_amount(wallet_amt.as_string(), size, color_before, color_after)
 }
 
 pub fn unconfirmed_amount_with_size<'a, T: 'a>(a: &Amount, size: u16) -> Row<'a, T> {
-    render_unconfirmed_amount(amount_as_string(*a), size)
+    let wallet_amt = WalletAmount::Btc(*a);
+    render_unconfirmed_amount(wallet_amt.as_string(), size)
 }
 
 //
@@ -40,7 +107,36 @@ pub fn unconfirmed_amount_with_size<'a, T: 'a>(a: &Amount, size: u16) -> Row<'a,
 
 // Format a BTC amount as a string for display.
 pub fn amount_as_string(a: Amount) -> String {
-    let amount = a.to_btc().to_string();
+    let wallet_amt = WalletAmount::Btc(a);
+    wallet_amount_as_string(wallet_amt)
+    // let amount = match a {
+    //     WalletAmount::Btc(amount) => {
+    //         // Convert the amount to a string with 8 decimal places.
+    //         amount.to_btc().to_string()
+    //     }
+    //     WalletAmount::Fiat(value, _) => value.to_string()
+    // };
+
+    // // Reformat the integer portion of the amount with space separation.
+    // let (integer, fraction) = match amount.split_once('.') {
+    //     Some((i, f)) => (i, f),
+    //     None => (amount.as_str(), "00000000"),
+    // };
+
+    // let integer = format_amount_number_part(integer, " ");
+    // let fraction = format_amount_number_part(&format!("{:0<8}", fraction), " ");
+
+    // format!("{integer}.{fraction}")
+}
+
+pub fn wallet_amount_as_string(a: WalletAmount) -> String {
+    let amount = match a {
+        WalletAmount::Btc(amount) => {
+            // Convert the amount to a string with 8 decimal places.
+            amount.to_btc().to_string()
+        }
+        WalletAmount::Fiat(value, _) => value.to_string(),
+    };
 
     // Reformat the integer portion of the amount with space separation.
     let (integer, fraction) = match amount.split_once('.') {
@@ -48,8 +144,8 @@ pub fn amount_as_string(a: Amount) -> String {
         None => (amount.as_str(), "00000000"),
     };
 
-    let integer = format_amount_number_part(integer);
-    let fraction = format_amount_number_part(&format!("{:0<8}", fraction));
+    let integer = format_amount_number_part(integer, " ");
+    let fraction = format_amount_number_part(&format!("{:0<8}", fraction), " ");
 
     format!("{integer}.{fraction}")
 }
@@ -61,7 +157,7 @@ pub fn amount_as_string(a: Amount) -> String {
 // Ex:
 //   1000 => 1 000
 //   100000 => 100 000
-fn format_amount_number_part(s: &str) -> String {
+fn format_amount_number_part(s: &str, sep: &str) -> String {
     let mut part = s
         .chars()
         .collect::<Vec<_>>()
@@ -70,7 +166,7 @@ fn format_amount_number_part(s: &str) -> String {
         .collect::<Vec<_>>();
     part.reverse();
 
-    part.join(" ")
+    part.join(sep)
 }
 
 // Helper functions split a string at the first occurence of a non-zero integer (where
@@ -136,19 +232,19 @@ mod tests {
     fn test_amount_as_str() {
         assert_eq!(
             "0.00 799 800",
-            amount_as_string(bitcoin::Amount::from_btc(0.00799800).unwrap())
+            WalletAmount::Btc(bitcoin::Amount::from_btc(0.00799800).unwrap()).as_string()
         );
         assert_eq!(
             "1 000.00 799 800",
-            amount_as_string(bitcoin::Amount::from_btc(1000.00799800).unwrap())
+            WalletAmount::Btc(bitcoin::Amount::from_btc(1000.00799800).unwrap()).as_string()
         );
         assert_eq!(
             "1 000.00 000 000",
-            amount_as_string(bitcoin::Amount::from_btc(1000.0).unwrap())
+            WalletAmount::Btc(bitcoin::Amount::from_btc(1000.0).unwrap()).as_string()
         );
         assert_eq!(
             "0.00 012 340",
-            amount_as_string(bitcoin::Amount::from_btc(0.00012340).unwrap())
+            WalletAmount::Btc(bitcoin::Amount::from_btc(0.00012340).unwrap()).as_string()
         )
     }
 }

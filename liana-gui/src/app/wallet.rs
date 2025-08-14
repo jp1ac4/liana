@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::app::settings::fiat::PriceSetting;
 use crate::dir::LianaDirectory;
 use crate::services::fiat::{Currency, PriceSource};
 use crate::{
@@ -155,14 +154,6 @@ impl Wallet {
             }
         }
         descriptor_keys
-    }
-
-    /// The wallet's effective price setting as currently configured.
-    pub fn effective_fiat_price_setting(&self) -> PriceSetting {
-        self.fiat_price_setting
-            .as_ref()
-            .cloned()
-            .unwrap_or_default()
     }
 
     pub fn load_from_settings(self, wallet_settings: WalletSettings) -> Result<Self, WalletError> {

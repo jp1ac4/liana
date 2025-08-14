@@ -130,7 +130,6 @@ pub struct Home {
     unconfirmed_balance: Amount,
     remaining_sequence: Option<u32>,
     expiring_coins: Vec<OutPoint>,
-    fiat_price: Option<FiatPrice>,
     events: Vec<Payment>,
     is_last_page: bool,
     processing: bool,
@@ -161,7 +160,6 @@ impl Home {
             unconfirmed_balance,
             remaining_sequence: remaining_seq,
             expiring_coins,
-            fiat_price: None,
             selected_event: None,
             events: Vec::new(),
             labels_edited: LabelsEdited::default(),
@@ -175,15 +173,19 @@ impl Home {
 
 impl State for Home {
     fn view<'a>(&'a self, cache: &'a Cache) -> Element<'a, view::Message> {
-        let fiat_price = self.wallet.effective_fiat_price_setting().is_enabled
-            && cache
-                .fiat_price
-                .as_ref()
-                .map(|p| {
-                    p.source == self.wallet.effective_fiat_price_setting().source
-                        && p.currency == self.wallet.effective_fiat_price_setting().currency
-                })
-                .unwrap_or(false);
+        let mut fiat_price: Option<FiatPrice> = None;
+        if let Some(sett) = self
+            .wallet
+            .fiat_price_setting
+            .as_ref()
+            .filter(|sett| sett.is_enabled)
+        {
+            if let Some(price) = cache.fiat_price.as_ref() {
+                if price.source == sett.source && price.currency == sett.currency {
+                    fiat_price = Some(price.clone());
+                }
+            }
+        }
         if let Some((tx, output_index)) = &self.selected_event {
             view::home::payment_view(
                 cache,
@@ -201,6 +203,7 @@ impl State for Home {
                     &self.balance,
                     &self.unconfirmed_balance,
                     &self.remaining_sequence,
+                    fiat_price,
                     &self.expiring_coins,
                     &self.events,
                     self.is_last_page,
@@ -280,9 +283,9 @@ impl State for Home {
                     cache.last_poll_at_startup,
                 );
                 // TODO: check if setting is enabled?
-                if self.fiat_price != cache.fiat_price {
-                    self.fiat_price = cache.fiat_price.clone();
-                };
+                // if self.fiat_price != cache.fiat_price {
+                //     self.fiat_price = cache.fiat_price.clone();
+                // };
                 // If this is the current panel, reload it if wallet is no longer syncing.
                 if is_current && wallet_was_syncing && self.sync_status.is_synced() {
                     return self.reload(daemon, self.wallet.clone());

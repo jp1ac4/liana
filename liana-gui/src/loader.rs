@@ -434,7 +434,7 @@ pub async fn load_application(
         .or_default_fiat_price_setting(network, daemon.backend().is_remote())
         .load_hotsigners(&datadir_path, network)?;
 
-    let coins: Vec<ListCoinsEntry> = coins_to_cache(daemon.clone()).await.map(|res| res.coins)?;
+    let coins = coins_to_cache(daemon.clone()).await.map(|res| res.coins)?;
 
     // Both last poll fields start with the same value.
     let cache = Cache {

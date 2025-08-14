@@ -19,7 +19,7 @@ use liana_ui::{
 
 use crate::{
     app::{
-        cache::Cache,
+        cache::{Cache, FiatPrice},
         error::Error,
         menu::{self, Menu},
         view::{coins, dashboard, label, message::Message},
@@ -66,6 +66,7 @@ pub fn home_view<'a>(
     balance: &'a bitcoin::Amount,
     unconfirmed_balance: &'a bitcoin::Amount,
     remaining_sequence: &Option<u32>,
+    fiat_price: Option<FiatPrice>,
     expiring_coins: &[bitcoin::OutPoint],
     events: &'a [Payment],
     is_last_page: bool,

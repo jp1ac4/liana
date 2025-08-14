@@ -97,6 +97,14 @@ async fn update_price_setting(
     Ok(Arc::new(wallet))
 }
 
+fn wallet_price_setting_or_default(wallet: &Wallet) -> PriceSetting {
+    wallet
+        .fiat_price_setting
+        .as_ref()
+        .cloned()
+        .unwrap_or_default()
+}
+
 pub struct FiatPriceSettingsState {
     wallet: Arc<Wallet>,
     new_price_setting: PriceSetting,
@@ -106,7 +114,7 @@ pub struct FiatPriceSettingsState {
 
 impl FiatPriceSettingsState {
     pub fn new(wallet: Arc<Wallet>) -> Self {
-        let new_price_setting = wallet.effective_fiat_price_setting();
+        let new_price_setting = wallet_price_setting_or_default(&wallet);
         Self {
             wallet,
             new_price_setting,
@@ -128,7 +136,7 @@ impl FiatPriceSettingsState {
     }
 
     fn reload(&mut self, wallet: Arc<Wallet>) -> iced::Task<Message> {
-        self.new_price_setting = wallet.effective_fiat_price_setting();
+        self.new_price_setting = wallet_price_setting_or_default(&wallet);
         self.wallet = wallet.clone();
         if self.new_price_setting.is_enabled {
             let source = self.new_price_setting.source;
@@ -152,8 +160,8 @@ impl FiatPriceSettingsState {
             Message::WalletUpdated(res) => {
                 match res {
                     Ok(wallet) => {
+                        self.new_price_setting = wallet_price_setting_or_default(&wallet);
                         self.wallet = wallet;
-                        self.new_price_setting = self.wallet.effective_fiat_price_setting();
                         self.error = None;
                         println!("Fiat price setting updated: {}", now().as_secs());
                         return Task::perform(async move {}, |_| {
