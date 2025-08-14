@@ -121,7 +121,7 @@ pub fn list(cache: &Cache, is_remote_backend: bool) -> Element<Message> {
     let general = settings_section(
         "General",
         None,
-        icon::bitcoin_icon(), // TODO: icon
+        icon::wrench_icon(),
         Message::Settings(SettingsMessage::GeneralSection),
     );
 
