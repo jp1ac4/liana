@@ -37,6 +37,12 @@ impl GeneralSettingsState {
     }
 }
 
+impl From<GeneralSettingsState> for Box<dyn State> {
+    fn from(s: GeneralSettingsState) -> Box<dyn State> {
+        Box::new(s)
+    }
+}
+
 impl State for GeneralSettingsState {
     fn view<'a>(&'a self, cache: &'a Cache) -> Element<'a, view::Message> {
         view::settings::general::general_section(
@@ -48,19 +54,19 @@ impl State for GeneralSettingsState {
 
     fn reload(
         &mut self,
-        daemon: Arc<dyn Daemon + Sync + Send>,
+        _daemon: Arc<dyn Daemon + Sync + Send>,
         wallet: Arc<Wallet>,
     ) -> iced::Task<Message> {
-        Task::batch(vec![self.fiat_state.reload(daemon, wallet)])
+        Task::batch(vec![self.fiat_state.reload(wallet)])
     }
 
     fn update(
         &mut self,
-        daemon: Arc<dyn Daemon + Sync + Send>,
+        _daemon: Arc<dyn Daemon + Sync + Send>,
         cache: &Cache,
         message: Message,
     ) -> Task<Message> {
-        Task::batch(vec![self.fiat_state.update(daemon, cache, message)])
+        Task::batch(vec![self.fiat_state.update(cache, message)])
     }
 }
 
@@ -121,11 +127,7 @@ impl FiatPriceSettingsState {
         )
     }
 
-    fn reload(
-        &mut self,
-        _daemon: Arc<dyn Daemon + Sync + Send>,
-        wallet: Arc<Wallet>,
-    ) -> iced::Task<Message> {
+    fn reload(&mut self, wallet: Arc<Wallet>) -> iced::Task<Message> {
         self.new_price_setting = wallet.effective_fiat_price_setting();
         self.wallet = wallet.clone();
         if self.new_price_setting.is_enabled {
@@ -145,12 +147,7 @@ impl FiatPriceSettingsState {
         Task::none()
     }
 
-    fn update(
-        &mut self,
-        _daemon: Arc<dyn Daemon + Sync + Send>,
-        cache: &Cache,
-        message: Message,
-    ) -> Task<Message> {
+    fn update(&mut self, cache: &Cache, message: Message) -> Task<Message> {
         match message {
             Message::WalletUpdated(res) => {
                 match res {
@@ -285,11 +282,5 @@ impl FiatPriceSettingsState {
             }
             _ => Task::none(),
         }
-    }
-}
-
-impl From<GeneralSettingsState> for Box<dyn State> {
-    fn from(s: GeneralSettingsState) -> Box<dyn State> {
-        Box::new(s)
     }
 }
