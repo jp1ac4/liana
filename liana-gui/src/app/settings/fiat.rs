@@ -9,11 +9,11 @@ pub struct PriceSetting {
         deserialize_with = "deser_fromstr",
         serialize_with = "serialize_display"
     )]
-    pub currency: Currency,
+    pub source: PriceSource,
     #[serde(
         deserialize_with = "deser_fromstr",
         serialize_with = "serialize_display"
     )]
-    pub source: PriceSource,
+    pub currency: Currency,
     pub is_enabled: bool,
 }

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use reqwest::Response;
 
 /// Information about an unsuccessful response.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotSuccessResponseInfo {
     pub status_code: u16,
     pub text: String,

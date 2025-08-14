@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::services::http::NotSuccessResponseInfo;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetPriceResult {
     pub value: u64,
     pub updated_at: Option<u64>,
@@ -15,7 +15,7 @@ pub struct ListCurrenciesResult {
     pub currencies: Vec<Currency>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PriceApiError {
     RequestFailed(String),
     NotSuccessResponse(NotSuccessResponseInfo),

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::app::settings::fiat::PriceSetting;
 use crate::dir::LianaDirectory;
+use crate::services::fiat::{Currency, PriceSource};
 use crate::{
     app::settings, daemon::DaemonBackend, hw::HardwareWalletConfig, node::NodeType, signer::Signer,
 };
@@ -114,6 +115,31 @@ impl Wallet {
         fiat_price_setting: Option<fiat::PriceSetting>,
     ) -> Self {
         self.fiat_price_setting = fiat_price_setting;
+        self
+    }
+
+    pub fn or_default_fiat_price_setting(
+        mut self,
+        network: bitcoin::Network,
+        is_remote_backend: bool,
+    ) -> Self {
+        if self.fiat_price_setting.is_none() {
+            self.fiat_price_setting = if is_remote_backend {
+                Some(fiat::PriceSetting {
+                    source: PriceSource::default(),
+                    currency: Currency::default(),
+                    is_enabled: network == bitcoin::Network::Bitcoin,
+                })
+            } else if network != bitcoin::Network::Bitcoin {
+                Some(fiat::PriceSetting {
+                    source: PriceSource::default(),
+                    currency: Currency::default(),
+                    is_enabled: false,
+                })
+            } else {
+                None // local backend on mainnet requires user to explicitly enable or disable
+            }
+        };
         self
     }
 

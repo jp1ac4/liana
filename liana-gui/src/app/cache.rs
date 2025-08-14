@@ -94,7 +94,7 @@ pub async fn coins_to_cache(
         .await
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FiatPrice {
     pub price_res: Result<GetPriceResult, PriceApiError>,
     pub currency: Currency,

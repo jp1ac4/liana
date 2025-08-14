@@ -431,15 +431,10 @@ pub async fn load_application(
 > {
     let wallet = Wallet::new(info.descriptors.main)
         .load_from_settings(wallet_settings)?
+        .or_default_fiat_price_setting(network, daemon.backend().is_remote())
         .load_hotsigners(&datadir_path, network)?;
 
-    let coins = coins_to_cache(daemon.clone()).await.map(|res| res.coins)?;
-    // let fiat_price = if let Some(sett) = wallet.fiat_price_setting.as_ref().filter(|sett| sett.is_enabled) {
-    //     // If the fiat price setting is enabled, we should fetch the fiat price.
-    //     Some(get_fiat_price(sett.source, sett.currency).await)
-    // } else {
-    //     None
-    // };
+    let coins: Vec<ListCoinsEntry> = coins_to_cache(daemon.clone()).await.map(|res| res.coins)?;
 
     // Both last poll fields start with the same value.
     let cache = Cache {

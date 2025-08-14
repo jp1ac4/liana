@@ -27,12 +27,15 @@ use super::{
 
 pub const HISTORY_EVENT_PAGE_SIZE: u64 = 20;
 
-use crate::daemon::model::{coin_is_owned, LabelsLoader};
 use crate::daemon::{
     model::{remaining_sequence, Coin, HistoryTransaction, Payment},
     Daemon,
 };
 use crate::utils::now;
+use crate::{
+    app::cache::FiatPrice,
+    daemon::model::{coin_is_owned, LabelsLoader},
+};
 pub use coins::CoinsPanel;
 use label::LabelsEdited;
 pub use psbts::PsbtsPanel;
@@ -127,6 +130,7 @@ pub struct Home {
     unconfirmed_balance: Amount,
     remaining_sequence: Option<u32>,
     expiring_coins: Vec<OutPoint>,
+    fiat_price: Option<FiatPrice>,
     events: Vec<Payment>,
     is_last_page: bool,
     processing: bool,
@@ -157,6 +161,7 @@ impl Home {
             unconfirmed_balance,
             remaining_sequence: remaining_seq,
             expiring_coins,
+            fiat_price: None,
             selected_event: None,
             events: Vec::new(),
             labels_edited: LabelsEdited::default(),
@@ -170,6 +175,15 @@ impl Home {
 
 impl State for Home {
     fn view<'a>(&'a self, cache: &'a Cache) -> Element<'a, view::Message> {
+        let fiat_price = self.wallet.effective_fiat_price_setting().is_enabled
+            && cache
+                .fiat_price
+                .as_ref()
+                .map(|p| {
+                    p.source == self.wallet.effective_fiat_price_setting().source
+                        && p.currency == self.wallet.effective_fiat_price_setting().currency
+                })
+                .unwrap_or(false);
         if let Some((tx, output_index)) = &self.selected_event {
             view::home::payment_view(
                 cache,
@@ -265,6 +279,10 @@ impl State for Home {
                     cache.last_poll_timestamp(),
                     cache.last_poll_at_startup,
                 );
+                // TODO: check if setting is enabled?
+                if self.fiat_price != cache.fiat_price {
+                    self.fiat_price = cache.fiat_price.clone();
+                };
                 // If this is the current panel, reload it if wallet is no longer syncing.
                 if is_current && wallet_was_syncing && self.sync_status.is_synced() {
                     return self.reload(daemon, self.wallet.clone());
@@ -372,6 +390,7 @@ impl State for Home {
         daemon: Arc<dyn Daemon + Sync + Send>,
         wallet: Arc<Wallet>,
     ) -> Task<Message> {
+        self.wallet = wallet;
         // If the wallet is syncing, we expect it to finish soon and so better to wait for
         // updated data before reloading. Besides, if the wallet is syncing, the DB may be
         // locked if the poller is running and we wouldn't be able to reload data until
@@ -380,7 +399,6 @@ impl State for Home {
             return Task::none();
         }
         self.selected_event = None;
-        self.wallet = wallet;
         let daemon2 = daemon.clone();
         let now: u32 = now().as_secs().try_into().unwrap();
         Task::batch(vec![
