@@ -110,6 +110,19 @@ pub fn fiat_price<'a>(
                             .padding(10),
                         ),
                 ),
+            )
+            .push_maybe(
+                new_price_setting
+                    .source
+                    .attribution()
+                    .filter(|_| new_price_setting.is_enabled)
+                    .map(|s| {
+                        Row::new()
+                            .spacing(20)
+                            .align_y(Alignment::Center)
+                            .push(Space::with_width(Length::Fill))
+                            .push(text(s))
+                    }),
             ),
     )
     .width(Length::Fill)

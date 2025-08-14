@@ -35,6 +35,17 @@ impl FromStr for PriceSource {
 }
 
 impl PriceSource {
+    /// Required attribution for the price source, if any.
+    pub fn attribution(&self) -> Option<String> {
+        match self {
+            // See https://www.coingecko.com/en/api_terms
+            Self::CoinGecko => Some("Powered by CoinGecko"),
+            Self::MempoolSpace => None,
+        }
+        .map(|s| s.to_string())
+    }
+
+    /// Returns the URL to fetch the price for a given currency.
     pub fn get_price_url(&self, _currency: Currency) -> String {
         match self {
             Self::CoinGecko => "https://api.coingecko.com/api/v3/exchange_rates".to_string(),
@@ -42,6 +53,7 @@ impl PriceSource {
         }
     }
 
+    /// Returns the URL to fetch the list of supported currencies.
     pub fn list_currencies_url(&self) -> String {
         match self {
             Self::CoinGecko => "https://api.coingecko.com/api/v3/exchange_rates".to_string(),
@@ -49,6 +61,7 @@ impl PriceSource {
         }
     }
 
+    /// Parses the price data in the API response from the `get_price_url` endpoint.
     pub fn parse_price_data(
         &self,
         currency: Currency,
@@ -75,11 +88,11 @@ impl PriceSource {
         Ok(GetPriceResult { value, updated_at })
     }
 
+    /// Parses the currencies data in the API response from the `list_currencies_url` endpoint.
     pub fn parse_currencies_data(
         &self,
         data: &serde_json::Value,
     ) -> Result<ListCurrenciesResult, PriceApiError> {
-        println!("parsing data: {:?}", data);
         let currencies: Vec<_> = match self {
             Self::CoinGecko => data
                 .get("rates")
