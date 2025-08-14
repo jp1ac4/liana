@@ -133,7 +133,7 @@ impl FiatPriceSettingsState {
         if self.new_price_setting.is_enabled {
             let source = self.new_price_setting.source;
             return Task::perform(async move { source }, |source| {
-                Message::Fiat(FiatMessage::UpdateCurrencies(source))
+                Message::Fiat(FiatMessage::ListCurrencies(source))
             });
         } else if self.wallet.fiat_price_setting.is_none() {
             // If the wallet does not have a fiat price setting, save the default disabled setting
@@ -219,7 +219,7 @@ impl FiatPriceSettingsState {
                 }
                 Task::none()
             }
-            Message::Fiat(FiatMessage::UpdateCurrencies(source)) => {
+            Message::Fiat(FiatMessage::ListCurrencies(source)) => {
                 if self.new_price_setting.is_enabled {
                     let now = now().as_secs();
                     match self.currencies_list.get(&source) {
@@ -256,7 +256,7 @@ impl FiatPriceSettingsState {
                         if self.new_price_setting.is_enabled {
                             let source = self.new_price_setting.source;
                             return Task::perform(async move { source }, |source| {
-                                Message::Fiat(FiatMessage::UpdateCurrencies(source))
+                                Message::Fiat(FiatMessage::ListCurrencies(source))
                             });
                         } else {
                             return Task::perform(async move {}, |_| {
@@ -269,7 +269,7 @@ impl FiatPriceSettingsState {
                         if self.new_price_setting.is_enabled {
                             let source = self.new_price_setting.source;
                             return Task::perform(async move { source }, |source| {
-                                Message::Fiat(FiatMessage::UpdateCurrencies(source))
+                                Message::Fiat(FiatMessage::ListCurrencies(source))
                             });
                         }
                     }

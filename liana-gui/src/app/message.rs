@@ -72,8 +72,12 @@ impl From<ImportExportMessage> for Message {
 pub enum FiatMessage {
     GetPrice,
     GetPriceResult(FiatPrice),
-    UpdateCurrencies(PriceSource),
-    ListCurrenciesResult(PriceSource, u64, Result<ListCurrenciesResult, Error>),
+    ListCurrencies(PriceSource),
+    ListCurrenciesResult(
+        PriceSource,
+        /* timestamp */ u64,
+        Result<ListCurrenciesResult, Error>,
+    ),
     SaveChanges,
     ValidateCurrencySetting,
 }
