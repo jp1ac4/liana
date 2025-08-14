@@ -35,7 +35,7 @@ use wallet::{sync_status, SyncStatus};
 
 use crate::{
     app::{
-        cache::{Cache, DaemonCache, FiatPrice},
+        cache::{Cache, DaemonCache},
         error::Error,
         menu::Menu,
         message::FiatMessage,
@@ -45,10 +45,6 @@ use crate::{
     daemon::{embedded::EmbeddedDaemon, Daemon, DaemonBackend},
     dir::LianaDirectory,
     node::{bitcoind::Bitcoind, NodeType},
-    services::fiat::{
-        api::{GetPriceResult, PriceApi},
-        PriceClient,
-    },
     utils::now,
 };
 

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use iced::Task;
 use liana::miniscript::bitcoin::Network;
+use liana_ui::widget::Element;
 
 use crate::app::cache::Cache;
 use crate::app::error::Error;
@@ -19,6 +20,49 @@ use crate::services::fiat::client::PriceClient;
 use crate::services::fiat::currency::Currency;
 use crate::services::fiat::source::PriceSource;
 use crate::utils::now;
+
+pub struct GeneralSettingsState {
+    fiat_state: FiatPriceSettingsState,
+}
+
+impl GeneralSettingsState {
+    pub fn new(wallet: Arc<Wallet>) -> Self {
+        Self {
+            fiat_state: FiatPriceSettingsState::new(wallet),
+        }
+    }
+
+    pub fn warning(&self) -> Option<&Error> {
+        self.fiat_state.error.as_ref()
+    }
+}
+
+impl State for GeneralSettingsState {
+    fn view<'a>(&'a self, cache: &'a Cache) -> Element<'a, view::Message> {
+        view::settings::general::general_section(
+            cache,
+            vec![self.fiat_state.view()],
+            self.warning(),
+        )
+    }
+
+    fn reload(
+        &mut self,
+        daemon: Arc<dyn Daemon + Sync + Send>,
+        wallet: Arc<Wallet>,
+    ) -> iced::Task<Message> {
+        Task::batch(vec![self.fiat_state.reload(daemon, wallet)])
+    }
+
+    fn update(
+        &mut self,
+        daemon: Arc<dyn Daemon + Sync + Send>,
+        cache: &Cache,
+        message: Message,
+    ) -> Task<Message> {
+        Task::batch(vec![self.fiat_state.update(daemon, cache, message)])
+    }
+}
 
 /// Time to live of the list of available currencies for a given `PriceSource`.
 const CURRENCIES_LIST_TTL_SECS: u64 = 3_600; // 1 hour
@@ -57,7 +101,7 @@ pub struct FiatPriceSettingsState {
 impl FiatPriceSettingsState {
     pub fn new(wallet: Arc<Wallet>) -> Self {
         let new_price_setting = wallet.effective_fiat_price_setting();
-        FiatPriceSettingsState {
+        Self {
             wallet,
             new_price_setting,
             currencies_list: HashMap::new(),
@@ -66,16 +110,14 @@ impl FiatPriceSettingsState {
     }
 }
 
-impl State for FiatPriceSettingsState {
-    fn view<'a>(&'a self, cache: &'a Cache) -> liana_ui::widget::Element<'a, view::Message> {
-        view::settings::general::general_section(
-            cache,
+impl FiatPriceSettingsState {
+    fn view(&self) -> Element<view::Message> {
+        view::settings::general::fiat_price(
             &self.new_price_setting,
             self.currencies_list
                 .get(&self.new_price_setting.source)
                 .map(|(_, list)| &list[..])
                 .unwrap_or(&[]),
-            self.error.as_ref(),
         )
     }
 
@@ -246,8 +288,8 @@ impl State for FiatPriceSettingsState {
     }
 }
 
-impl From<FiatPriceSettingsState> for Box<dyn State> {
-    fn from(s: FiatPriceSettingsState) -> Box<dyn State> {
+impl From<GeneralSettingsState> for Box<dyn State> {
+    fn from(s: GeneralSettingsState) -> Box<dyn State> {
         Box::new(s)
     }
 }

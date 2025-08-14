@@ -66,8 +66,7 @@ impl State for SettingsState {
     ) -> Task<Message> {
         match &message {
             Message::View(view::Message::Settings(view::SettingsMessage::GeneralSection)) => {
-                self.setting =
-                    Some(general::FiatPriceSettingsState::new(self.wallet.clone()).into());
+                self.setting = Some(general::GeneralSettingsState::new(self.wallet.clone()).into());
                 let wallet = self.wallet.clone();
                 self.setting
                     .as_mut()
