@@ -14,7 +14,7 @@ pub struct AmountFormatter<'a> {
     /// the decimal part will be padded with zeros
     /// to the right to match the specified number of decimals.
     pub num_decimals: usize,
-    /// Whether to separate the decimal part with the separator.
+    /// Whether to separate the decimal part with `sep`.
     ///
     /// If `true`, the decimal part will be grouped from the right.
     ///
@@ -31,38 +31,11 @@ impl<'a> AmountFormatter<'a> {
 }
 
 pub trait WalletAmount {
-    // fn as_f64(&self) -> f64;
-    // fn formatter(&self) -> AmountFormatter;
     fn as_formatted_string(&self) -> String;
     fn unit(&self) -> String;
 }
 
-/// Convenience trait for types that can be formatted as a string.
-// pub trait AsFormattedString {
-//     /// Converts the amount to a string representation with formatting.
-//     fn as_formatted_string(&self) -> String;
-// }
-
-// impl<A: WalletAmount> AsFormattedString for A {
-//     fn as_formatted_string(&self) -> String {
-//         self.formatter().format(self.as_f64())
-//     }
-// }
-
 impl WalletAmount for Amount {
-    // fn as_f64(&self) -> f64 {
-    //     self.to_btc()
-    // }
-
-    // fn formatter(&self) -> AmountFormatter {
-    //     AmountFormatter {
-    //         sep: " ",
-    //         num_decimals: 8,
-    //         sep_decimals: true,
-    //         unit: "BTC".to_string(),
-    //     }
-    // }
-
     fn as_formatted_string(&self) -> String {
         // Use your AmountFormatter or formatting logic directly
         let formatter = AmountFormatter {
@@ -168,35 +141,6 @@ fn format_amount_number_part(s: &str, sep: &str) -> String {
     part.join(sep)
 }
 
-// fn format_amount_number_part(s: &str, sep: char) -> String {
-//     let chars: Vec<char> = s.chars().collect();
-//     let mut result = String::with_capacity(s.len() + (chars.len() / 3));
-//     let len = chars.len();
-//     if len == 0 {
-//         return result;
-//     }
-//     let mut first_group_len = len % 3;
-//     if first_group_len == 0 {
-//         first_group_len = 3;
-//     }
-//     // Write the first group (could be less than 3)
-//     for c in chars.iter().take(first_group_len) {
-//         result.push(*c);
-//     }
-//     // Write the rest in groups of 3, prefixed by sep
-//     let mut i = first_group_len;
-//     while i < len {
-//         result.push(sep);
-//         for j in 0..3 {
-//             if i + j < len {
-//                 result.push(chars[i + j]);
-//             }
-//         }
-//         i += 3;
-//     }
-//     result
-// }
-
 // Helper functions split a string at the first occurence of a non-zero integer (where
 // the amount starts).
 fn split_at_first_non_zero(s: &str) -> Option<(String, String)> {
@@ -295,41 +239,59 @@ mod tests {
             "1 234 567.12345678"
         );
         assert_eq!(
+            format_f64_with_sep(1234567.12345678, " ", 8, true),
+            "1 234 567.12 345 678"
+        );
+
+        assert_eq!(
             format_f64_with_sep(1234567.12345678, ",", 2, false),
             "1,234,567.12"
         );
         assert_eq!(
+            format_f64_with_sep(1234567.12345678, ",", 2, true),
+            "1,234,567.12"
+        );
+
+        assert_eq!(
             format_f64_with_sep(1234567.12345678, ",", 4, false),
             "1,234,567.1235"
         );
-        assert_eq!(format_f64_with_sep(0.000132, " ", 8, false), "0.00013200");
-        assert_eq!(format_f64_with_sep(0.0, " ", 8, false), "0.00000000");
         assert_eq!(
-            format_f64_with_sep(1234567.12345678, " ", 8, true),
-            "1 234 567.12 345 678"
+            format_f64_with_sep(1234567.12345678, ",", 4, true),
+            "1,234,567.1,235"
         );
+
+        assert_eq!(format_f64_with_sep(0.000132, " ", 8, false), "0.00013200");
+        assert_eq!(format_f64_with_sep(0.000132, " ", 8, true), "0.00 013 200");
+
+        assert_eq!(format_f64_with_sep(0.0, " ", 8, false), "0.00000000");
+        assert_eq!(format_f64_with_sep(0.0, " ", 8, true), "0.00 000 000");
+
         assert_eq!(
-            format_f64_with_sep(0.00799800, " ", 8, true),
-            "0.00 799 800"
+            format_f64_with_sep(1000.00799800, " ", 8, false),
+            "1 000.00799800"
         );
         assert_eq!(
             format_f64_with_sep(1000.00799800, " ", 8, true),
             "1 000.00 799 800"
         );
+
+        assert_eq!(format_f64_with_sep(1000.0, " ", 8, false), "1 000.00000000");
         assert_eq!(
             format_f64_with_sep(1000.0, " ", 8, true),
             "1 000.00 000 000"
         );
-        assert_eq!(
-            format_f64_with_sep(0.00012340, " ", 8, true),
-            "0.00 012 340"
-        );
-        assert_eq!(format_f64_with_sep(0.000132, " ", 8, true), "0.00 013 200");
-        assert_eq!(format_f64_with_sep(0.0, " ", 8, true), "0.00 000 000");
-        assert_eq!(format_f64_with_sep(1234.5, ",", 4, true), "1,234.5,000");
+
         assert_eq!(format_f64_with_sep(1234567.0, " ", 0, false), "1 234 567");
+        assert_eq!(format_f64_with_sep(1234567.0, " ", 0, true), "1 234 567");
+
         assert_eq!(format_f64_with_sep(1234567.0, ",", 0, false), "1,234,567");
+        assert_eq!(format_f64_with_sep(1234567.0, ",", 0, true), "1,234,567");
+
         assert_eq!(format_f64_with_sep(0.0, " ", 0, false), "0");
+        assert_eq!(format_f64_with_sep(0.0, " ", 0, true), "0");
+
         assert_eq!(format_f64_with_sep(0.0, ",", 0, false), "0");
+        assert_eq!(format_f64_with_sep(0.0, ",", 0, true), "0");
     }
 }
