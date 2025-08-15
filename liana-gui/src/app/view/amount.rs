@@ -1,5 +1,5 @@
 use liana::miniscript::bitcoin::Amount;
-use liana_ui::component::amount::{ToFormattedString, WalletAmount};
+use liana_ui::component::amount::{AmountFormatter, WalletAmount};
 
 use crate::services::fiat::Currency;
 
@@ -20,26 +20,54 @@ impl FiatAmount {
 }
 
 impl WalletAmount for FiatAmount {
-    fn to_f64(&self) -> f64 {
-        self.amount
-    }
+    // fn as_f64(&self) -> f64 {
+    //     self.amount
+    // }
 
-    fn sep(&self) -> char {
-        ','
-    }
-
-    fn num_decimals(&self) -> usize {
-        2
-    }
-
-    fn sep_decimals(&self) -> bool {
-        false
+    // fn formatter(&self) -> AmountFormatter {
+    //     AmountFormatter {
+    //         sep: ',',
+    //         num_decimals: 2,
+    //         sep_decimals: false,
+    //         unit: self.currency.to_string(),
+    //     }
+    // }
+    fn as_formatted_string(&self) -> String {
+        // Use your AmountFormatter or formatting logic directly
+        let formatter = AmountFormatter {
+            sep: ",",
+            num_decimals: 2,
+            sep_decimals: false,
+        };
+        formatter.format(self.amount)
     }
 
     fn unit(&self) -> String {
         self.currency.to_string()
     }
 }
+
+// impl WalletAmount for FiatAmount {
+//     fn as_f64(&self) -> f64 {
+//         self.amount
+//     }
+
+//     fn sep(&self) -> char {
+//         ','
+//     }
+
+//     fn num_decimals(&self) -> usize {
+//         2
+//     }
+
+//     fn sep_decimals(&self) -> bool {
+//         false
+//     }
+
+//     fn unit(&self) -> String {
+//         self.currency.to_string()
+//     }
+// }
 
 fn _sdsd() {
     let a = FiatAmount::_from_btc(Amount::from_sat(123456789), Currency::AED, 100);
