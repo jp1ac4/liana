@@ -1,3 +1,4 @@
+mod amount;
 mod label;
 mod message;
 mod warning;
