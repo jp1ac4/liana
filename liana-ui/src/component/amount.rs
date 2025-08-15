@@ -51,6 +51,41 @@ impl WalletAmount for Amount {
     }
 }
 
+/// Amount with default size and colors.
+pub fn amount<'a, A: WalletAmount, T: 'a>(a: &A) -> Row<'a, T> {
+    amount_with_size(a, P1_SIZE)
+}
+
+/// Amount with default colors.
+pub fn amount_with_size<'a, A: WalletAmount, T: 'a>(a: &A, size: u16) -> Row<'a, T> {
+    amount_with_size_and_colors(a, size, color::GREY_3, None)
+}
+
+/// Amount with the given size and colors.
+///
+/// `color_before` is the color to use before the first non-zero
+/// value in `a`.
+///
+/// `color_after` is the color to use from the first non-zero
+/// value in `a` onwards. If `None`, the default theme value
+/// will be used.
+pub fn amount_with_size_and_colors<'a, A: WalletAmount, T: 'a>(
+    a: &A,
+    size: u16,
+    color_before: Color,
+    color_after: Option<Color>,
+) -> Row<'a, T> {
+    render_amount(a, size, color_before, color_after)
+}
+
+pub fn unconfirmed_amount_with_size<'a, A: WalletAmount, T: 'a>(a: &A, size: u16) -> Row<'a, T> {
+    render_unconfirmed_amount(a, size)
+}
+
+//
+// Helpers
+//
+
 /// Formats an f64 as a string with a custom separator and number of decimals,
 /// padding the decimal part with zeros if needed.
 /// If `sep_decimals` is true, also applies the separator to the decimal part,
@@ -93,41 +128,6 @@ pub fn format_f64_with_sep(
         int_with_sep
     }
 }
-
-/// Amount with default size and colors.
-pub fn amount<'a, A: WalletAmount, T: 'a>(a: &A) -> Row<'a, T> {
-    amount_with_size(a, P1_SIZE)
-}
-
-/// Amount with default colors.
-pub fn amount_with_size<'a, A: WalletAmount, T: 'a>(a: &A, size: u16) -> Row<'a, T> {
-    amount_with_size_and_colors(a, size, color::GREY_3, None)
-}
-
-/// Amount with the given size and colors.
-///
-/// `color_before` is the color to use before the first non-zero
-/// value in `a`.
-///
-/// `color_after` is the color to use from the first non-zero
-/// value in `a` onwards. If `None`, the default theme value
-/// will be used.
-pub fn amount_with_size_and_colors<'a, A: WalletAmount, T: 'a>(
-    a: &A,
-    size: u16,
-    color_before: Color,
-    color_after: Option<Color>,
-) -> Row<'a, T> {
-    render_amount(a, size, color_before, color_after)
-}
-
-pub fn unconfirmed_amount_with_size<'a, A: WalletAmount, T: 'a>(a: &A, size: u16) -> Row<'a, T> {
-    render_unconfirmed_amount(a, size)
-}
-
-//
-// Helpers
-//
 
 fn format_amount_number_part(s: &str, sep: &str) -> String {
     let mut part = s
