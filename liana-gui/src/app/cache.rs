@@ -4,10 +4,17 @@ use crate::{
         Daemon, DaemonError,
     },
     dir::LianaDirectory,
+    services::fiat::{
+        api::{GetPriceResult, PriceApi, PriceApiError},
+        client::PriceClient,
+        Currency, PriceSource,
+    },
 };
 use liana::miniscript::bitcoin::Network;
 use lianad::commands::CoinStatus;
 use std::sync::Arc;
+
+pub const FIAT_PRICE_UPDATE_INTERVAL_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct Cache {
@@ -16,6 +23,7 @@ pub struct Cache {
     /// The `last_poll_timestamp` when starting the application.
     pub last_poll_at_startup: Option<u32>,
     pub daemon_cache: DaemonCache,
+    pub fiat_price: Option<FiatPrice>,
 }
 
 /// only used for tests.
@@ -26,6 +34,7 @@ impl std::default::Default for Cache {
             network: Network::Bitcoin,
             last_poll_at_startup: None,
             daemon_cache: DaemonCache::default(),
+            fiat_price: None,
         }
     }
 }
@@ -83,4 +92,23 @@ pub async fn coins_to_cache(
     daemon
         .list_coins(&[CoinStatus::Unconfirmed, CoinStatus::Confirmed], &[])
         .await
+}
+
+/// Represents a fiat price fetched from the API.
+#[derive(Debug, Clone)]
+pub struct FiatPrice {
+    pub res: Result<GetPriceResult, PriceApiError>, // also store error in case we want to display it to user
+    pub currency: Currency,
+    pub source: PriceSource,
+    pub requested_at: u64,
+}
+
+pub async fn get_fiat_price(source: PriceSource, currency: Currency) -> FiatPrice {
+    let client = PriceClient::default_from_source(source);
+    FiatPrice {
+        res: client.get_price(currency).await,
+        currency,
+        source: client.source,
+        requested_at: crate::utils::now().as_secs(),
+    }
 }

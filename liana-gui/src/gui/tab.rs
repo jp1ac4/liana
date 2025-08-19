@@ -362,6 +362,7 @@ pub fn create_app_with_remote_backend(
                 // We ignore last poll fields for remote backend.
                 last_poll_timestamp: None,
             },
+            fiat_price: None,
         },
         Arc::new(
             Wallet::new(wallet.descriptor)
@@ -371,6 +372,8 @@ pub fn create_app_with_remote_backend(
                 .with_key_aliases(aliases)
                 .with_provider_keys(provider_keys)
                 .with_hardware_wallets(hws)
+                .with_fiat_price_setting(wallet_settings.fiat_price)
+                .or_default_fiat_price_setting(network, true)
                 .load_hotsigners(&liana_dir, network)
                 .expect("Datadir should be conform"),
         ),
