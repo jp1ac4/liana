@@ -11,15 +11,16 @@ use liana_ui::widget::*;
 use crate::app::cache;
 use crate::app::error::Error;
 use crate::app::menu::Menu;
-use crate::app::settings::fiat::PriceSetting;
 use crate::app::view::dashboard;
 use crate::app::view::message::*;
 use crate::app::view::settings::SettingsMessage;
-use crate::services::fiat::{Currency, ALL_PRICE_SOURCES};
+use crate::services::fiat::{Currency, PriceSource, ALL_PRICE_SOURCES};
 
 pub fn general_section<'a>(
     cache: &'a cache::Cache,
-    new_price_setting: &'a PriceSetting,
+    fiat_is_enabled: bool,
+    source: PriceSource,
+    currency: Option<Currency>,
     currencies_list: &'a [Currency],
     warning: Option<&Error>,
 ) -> Element<'a, Message> {
@@ -29,17 +30,21 @@ pub fn general_section<'a>(
         &Menu::Settings,
         cache,
         warning,
-        Column::new()
-            .spacing(20)
-            .push(header)
-            .push(fiat_price(new_price_setting, currencies_list)),
+        Column::new().spacing(20).push(header).push(fiat_price(
+            fiat_is_enabled,
+            source,
+            currency,
+            currencies_list,
+        )),
     )
 }
 
-pub fn fiat_price<'a>(
-    new_price_setting: &'a PriceSetting,
-    currencies_list: &'a [Currency],
-) -> Element<'a, Message> {
+pub fn fiat_price(
+    is_enabled: bool,
+    source: PriceSource,
+    currency: Option<Currency>,
+    currencies_list: &[Currency],
+) -> Element<'_, Message> {
     card::simple(
         Column::new()
             .spacing(20)
@@ -50,7 +55,7 @@ pub fn fiat_price<'a>(
                     .push(text("Fiat price:").bold())
                     .push(Space::with_width(Length::Fill))
                     .push(
-                        Toggler::new(new_price_setting.is_enabled)
+                        Toggler::new(is_enabled)
                             .on_toggle(|new_selection| {
                                 Message::Settings(SettingsMessage::Fiat(FiatMessage::Enable(
                                     new_selection,
@@ -60,62 +65,48 @@ pub fn fiat_price<'a>(
                     ),
             )
             .push_maybe(
-                new_price_setting.is_enabled.then_some(
+                is_enabled.then_some(
                     Row::new()
                         .spacing(20)
                         .align_y(Alignment::Center)
                         .push(text("Exchange rate source:").bold())
                         .push(Space::with_width(Length::Fill))
                         .push(
-                            pick_list(
-                                &ALL_PRICE_SOURCES[..],
-                                Some(new_price_setting.source),
-                                |source| {
-                                    Message::Settings(SettingsMessage::Fiat(
-                                        FiatMessage::SourceEdited(source),
-                                    ))
-                                },
-                            )
+                            pick_list(&ALL_PRICE_SOURCES[..], Some(source), |source| {
+                                Message::Settings(SettingsMessage::Fiat(FiatMessage::SourceEdited(
+                                    source,
+                                )))
+                            })
                             .style(theme::pick_list::primary)
                             .padding(10),
                         ),
                 ),
             )
             .push_maybe(
-                new_price_setting.is_enabled.then_some(
+                is_enabled.then_some(
                     Row::new()
                         .spacing(20)
                         .align_y(Alignment::Center)
                         .push(text("Currency:").bold())
                         .push(Space::with_width(Length::Fill))
                         .push(
-                            pick_list(
-                                currencies_list,
-                                Some(new_price_setting.currency),
-                                |currency| {
-                                    Message::Settings(SettingsMessage::Fiat(
-                                        FiatMessage::CurrencyEdited(currency),
-                                    ))
-                                },
-                            )
+                            pick_list(currencies_list, currency, |currency| {
+                                Message::Settings(SettingsMessage::Fiat(
+                                    FiatMessage::CurrencyEdited(currency),
+                                ))
+                            })
                             .style(theme::pick_list::primary)
                             .padding(10),
                         ),
                 ),
             )
-            .push_maybe(
-                new_price_setting
-                    .source
-                    .attribution()
-                    .filter(|_| new_price_setting.is_enabled)
-                    .map(|s| {
-                        Row::new()
-                            .spacing(20)
-                            .align_y(Alignment::Center)
-                            .push(Space::with_width(Length::Fill))
-                            .push(text(s))
-                    }),
-            ),
+            .push_maybe(source.attribution().filter(|_| is_enabled).map(|s| {
+                Row::new()
+                    .spacing(20)
+                    .align_y(Alignment::Center)
+                    .push(Space::with_width(Length::Fill))
+                    .push(text(s))
+            })),
     )
     .width(Length::Fill)
     .into()
