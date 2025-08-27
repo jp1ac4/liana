@@ -825,6 +825,10 @@ impl Step for DefineSpend {
             self.is_first_step,
         )
     }
+
+    fn reload_wallet(&mut self, wallet: Arc<Wallet>) {
+        self.wallet = wallet;
+    }
 }
 
 #[derive(Default, Clone)]
