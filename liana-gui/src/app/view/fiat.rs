@@ -1,4 +1,5 @@
 use std::convert::TryFrom;
+use std::num::ParseFloatError;
 
 use liana::miniscript::bitcoin::Amount;
 use liana_ui::component::amount::{format_f64_as_string, DisplayAmount};
@@ -16,12 +17,14 @@ pub struct FiatAmount {
 #[derive(Debug)]
 pub enum AmountError {
     Negative,
+    ParseError(String),
 }
 
 impl std::fmt::Display for AmountError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::Negative => write!(f, "Amount must be non-negative"),
+            Self::ParseError(e) => write!(f, "Parse error: {}", e),
         }
     }
 }
@@ -32,6 +35,14 @@ impl FiatAmount {
             return Err(AmountError::Negative);
         }
         Ok(Self { amount, currency })
+    }
+
+    pub fn from_str_in(s: &str, currency: Currency) -> Result<Self, AmountError> {
+        let amount: f64 = s
+            .trim()
+            .parse()
+            .map_err(|e: ParseFloatError| AmountError::ParseError(e.to_string()))?;
+        Self::new(amount, currency)
     }
 
     pub fn amount(&self) -> f64 {
