@@ -22,7 +22,14 @@ use lianad::commands::ListCoinsEntry;
 use liana_ui::{component::form, widget::Element};
 
 use crate::{
-    app::{cache::Cache, error::Error, message::Message, state::psbt, view, wallet::Wallet},
+    app::{
+        cache::Cache,
+        error::Error,
+        message::Message,
+        state::{fiat_converter_for_wallet, psbt},
+        view,
+        wallet::Wallet,
+    },
     daemon::{
         model::{coin_is_owned, remaining_sequence, Coin, CreateSpendResult, SpendTx},
         Daemon,
@@ -800,6 +807,7 @@ impl Step for DefineSpend {
     }
 
     fn view<'a>(&'a self, cache: &'a Cache) -> Element<'a, view::Message> {
+        let converter = fiat_converter_for_wallet(&self.wallet, cache);
         view::spend::create_spend_tx(
             cache,
             self.recipients
@@ -807,7 +815,7 @@ impl Step for DefineSpend {
                 .enumerate()
                 .map(|(i, recipient)| {
                     recipient
-                        .view(i, self.send_max_to_recipient == Some(i))
+                        .view(i, self.send_max_to_recipient == Some(i), converter.as_ref())
                         .map(view::Message::CreateSpend)
                 })
                 .collect(),
@@ -918,11 +926,17 @@ impl Recipient {
         };
     }
 
-    fn view(&self, i: usize, is_max_selected: bool) -> Element<view::CreateSpendMessage> {
+    fn view(
+        &self,
+        i: usize,
+        is_max_selected: bool,
+        fiat_converter: Option<&view::FiatAmountConverter>,
+    ) -> Element<view::CreateSpendMessage> {
         view::spend::recipient_view(
             i,
             &self.address,
             &self.amount,
+            fiat_converter,
             &self.label,
             is_max_selected,
             self.is_recovery,

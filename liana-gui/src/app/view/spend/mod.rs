@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use iced::{
     alignment,
-    widget::{checkbox, scrollable, tooltip, Space},
+    widget::{checkbox, scrollable, tooltip, Container, Row, Space},
     Alignment, Length,
 };
 
@@ -22,7 +22,7 @@ use crate::{
         cache::Cache,
         error::Error,
         menu::Menu,
-        view::{coins, dashboard, message::*, psbt},
+        view::{coins, dashboard, message::*, psbt, FiatAmountConverter},
     },
     daemon::model::{remaining_sequence, Coin, SpendTx},
 };
@@ -369,10 +369,13 @@ pub fn recipient_view<'a>(
     index: usize,
     address: &'a form::Value<String>,
     amount: &'a form::Value<String>,
+    fiat_converter: Option<&FiatAmountConverter>,
     label: &'a form::Value<String>,
     is_max_selected: bool,
     is_recovery: bool,
 ) -> Element<'a, CreateSpendMessage> {
+    let btc_amt = Amount::from_str_in(&amount.value, Denomination::Bitcoin).ok();
+    let fiat_amt = fiat_converter.and_then(|conv| btc_amt.map(|a| conv.convert(a)));
     Container::new(
         Column::new()
             .spacing(10)
@@ -436,32 +439,73 @@ pub fn recipient_view<'a>(
                             .width(Length::Fixed(110.0)),
                     )
                     .push_maybe(if is_max_selected {
-                        let amount_txt = Amount::from_str_in(&amount.value, Denomination::Bitcoin)
-                            .ok()
+                        let amount_txt = btc_amt
                             .map(|a| a.to_formatted_string())
                             .unwrap_or(amount.value.clone());
-                        Some(
-                            Container::new(
-                                text(amount_txt).size(P1_SIZE).style(theme::text::secondary),
-                            )
-                            .padding(10)
-                            .width(Length::Fill),
-                        )
+                        Some(Container::new(
+                            Row::new()
+                                .push(text(amount_txt).size(P1_SIZE).style(theme::text::secondary))
+                                .push_maybe(fiat_amt.as_ref().map(|fa| {
+                                    Row::new()
+                                        .push(Space::with_width(Length::Fixed(10.0)))
+                                        .push(
+                                            text(format!(
+                                                " (~{} {})",
+                                                fa.to_formatted_string(),
+                                                fa.currency
+                                            ))
+                                            .size(P2_SIZE)
+                                            .style(theme::text::secondary),
+                                        )
+                                }))
+                                .padding(10)
+                                .width(Length::Fill)
+                                .align_y(Alignment::Center),
+                        ))
                     } else {
                         None
                     })
                     .push_maybe(if !is_max_selected {
-                        Some(form::Form::new_amount_btc("0.001 (in BTC)", amount, move |msg| {
-                            CreateSpendMessage::RecipientEdited(index, "amount", msg)
-                        })
-                        .warning(
-                            "Invalid amount. (Note amounts lower than 0.00005 BTC are invalid.)",
+                        Some(
+                            Row::new()
+                                .align_y(Alignment::Center)
+                                .push(Container::new(
+                                    form::Form::new_amount_btc(
+                                        "0.001 (in BTC)",
+                                        amount,
+                                        move |msg| {
+                                            CreateSpendMessage::RecipientEdited(
+                                                index, "amount", msg,
+                                            )
+                                        },
+                                    )
+                                    .warning(
+                                        "In valid amount. (Note amounts lower than 0.00005 BTC are invalid.)",
+                                    )
+                                    .size(P1_SIZE)
+                                    .padding(10)
+                                ).width(Length::Fixed(400.0)),
+                                )
+                                .push_maybe(fiat_amt.map(|fa| {
+                                    Row::new()
+                                        .align_y(Alignment::Center)
+                                        .push(Space::with_width(Length::Fixed(10.0)))
+                                        .push(
+                                            text(format!(
+                                                " (~{} {})",
+                                                fa.to_formatted_string(),
+                                                fa.currency
+                                            ))
+                                            .size(P2_SIZE)
+                                            .style(theme::text::secondary)
+                                            .align_y(Alignment::Center),
+                                        )
+                                })),
                         )
-                        .size(P1_SIZE)
-                        .padding(10))
                     } else {
                         None
                     })
+                    .push(Space::with_width(Length::Fill))
                     .push_maybe(
                         // The MAX option cannot be edited for recovery recipients.
                         (!is_recovery).then_some(tooltip::Tooltip::new(
