@@ -214,6 +214,14 @@ impl App {
         "Liana wallet"
     }
 
+    pub fn cache(&self) -> &Cache {
+        &self.cache
+    }
+
+    pub fn wallet(&self) -> &Wallet {
+        &self.wallet
+    }
+
     fn set_current_panel(&mut self, menu: Menu) -> Task<Message> {
         self.panels.current_mut().interrupt();
 

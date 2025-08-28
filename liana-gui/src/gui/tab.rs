@@ -69,6 +69,22 @@ impl Tab {
         Tab { id, state }
     }
 
+    pub fn cache(&self) -> Option<&Cache> {
+        if let State::App(ref app) = self.state {
+            Some(app.cache())
+        } else {
+            None
+        }
+    }
+
+    pub fn wallet(&self) -> Option<&Wallet> {
+        if let State::App(ref app) = self.state {
+            Some(app.wallet())
+        } else {
+            None
+        }
+    }
+
     pub fn title(&self) -> &str {
         match &self.state {
             State::Installer(_) => "Installer",
