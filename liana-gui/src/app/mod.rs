@@ -45,7 +45,6 @@ use crate::{
     daemon::{embedded::EmbeddedDaemon, Daemon, DaemonBackend},
     dir::LianaDirectory,
     node::{bitcoind::Bitcoind, NodeType},
-    // utils::now,
 };
 
 use self::state::SettingsState;

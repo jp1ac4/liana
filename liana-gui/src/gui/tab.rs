@@ -85,6 +85,10 @@ impl Tab {
         }
     }
 
+    pub fn fiat_price_setting(&self) -> Option<&app::settings::fiat::PriceSetting> {
+        self.wallet().and_then(|w| w.fiat_price_setting.as_ref())
+    }
+
     pub fn title(&self) -> &str {
         match &self.state {
             State::Installer(_) => "Installer",
