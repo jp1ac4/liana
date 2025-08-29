@@ -197,33 +197,6 @@ impl State for GeneralSettingsState {
                 }
                 Task::none()
             }
-            // Message::Fiat(FiatMessage::ListCurrencies(source)) => {
-            //     if self.new_price_setting.is_enabled {
-            //         // Update the currencies list if the cached list is stale.
-            //         let now = now().as_secs();
-            //         match self.currencies_list.get(&source) {
-            //             Some((old, _)) if now.saturating_sub(*old) <= CURRENCIES_LIST_TTL_SECS => {
-            //                 return Task::perform(async move {}, |_| {
-            //                     Message::Fiat(FiatMessage::ValidateCurrencySetting)
-            //                 });
-            //             }
-            //             _ => {
-            //                 return Task::perform(
-            //                     async move {
-            //                         let client = PriceClient::default_from_source(source);
-            //                         (source, now, client.list_currencies().await)
-            //                     },
-            //                     |(source, now, res)| {
-            //                         Message::Fiat(FiatMessage::ListCurrenciesResult(
-            //                             source, now, res,
-            //                         ))
-            //                     },
-            //                 );
-            //             }
-            //         }
-            //     }
-            //     Task::none()
-            // }
             Message::View(view::Message::Settings(view::SettingsMessage::Fiat(msg))) => {
                 match msg {
                     view::FiatMessage::Enable(is_enabled) => {
