@@ -63,6 +63,175 @@ pub struct GlobalCache {
     fiat_prices: FiatPricesCache,
 }
 
+impl GlobalCache {
+    fn handle_fiat_message(
+        &mut self,
+        pane_id: pane_grid::Pane,
+        pane: &mut pane::Pane,
+        tab_id: usize,
+        config: &Config,
+        fiat_msg: FiatMessage,
+    ) -> Task<Message> {
+        if let Some(tab) = pane.tabs.iter().find(|t| t.id == tab_id) {
+            if let Some(price_setting) = tab
+                .wallet()
+                .and_then(|w| w.fiat_price_setting.as_ref().filter(|sett| sett.is_enabled))
+            {
+                let now = now().as_secs();
+                if let FiatMessage::GetPrice = fiat_msg {
+                    // return self.global_cache.handle_fiat_message(i, &pane, tab_id, fiat);
+                    println!("Tab id {} requested fiat price", tab_id);
+                    println!("Tab fiat price enabled");
+
+                    // If there's already a cached price no older than the update interval,
+                    // return it to the specific tab that requested it.
+                    if let Some(cached) = self
+                        .fiat_prices
+                        .prices
+                        .get(&(price_setting.source, price_setting.currency))
+                        .as_ref()
+                        .filter(|req| req.requested_at() + FIAT_PRICE_UPDATE_INTERVAL_SECS > now)
+                    {
+                        if tab
+                            .cache()
+                            .and_then(|c| c.fiat_price.as_ref())
+                            .is_some_and(|p| {
+                                p.source() == cached.source()
+                                    && p.currency() == cached.currency()
+                                    && p.requested_at() == cached.requested_at()
+                            })
+                        {
+                            tracing::info!(
+                                "Tab already has fiat price for {} from {}",
+                                cached.currency(),
+                                cached.source(),
+                            );
+                            return Task::none();
+                        }
+                        // Return cached price to the tab that requested it.
+                        tracing::info!(
+                            "Returning cached fiat price for {} from {} to tab",
+                            cached.currency(),
+                            cached.source(),
+                        );
+                        return pane
+                            .update_tab_with_fiat(
+                                tab_id,
+                                FiatMessage::GetPriceResult((*cached).clone()),
+                                config,
+                            )
+                            .map(move |msg| Message::Pane(pane_id, msg));
+                    }
+                    // Make sure there is not a pending request.
+                    // Do nothing if the last request was recent and was for the same source & currency, where
+                    // "recent" means within half the update interval.
+                    // Using half the update interval is sufficient as we are mostly concerned with preventing
+                    // multiple requests being sent within seconds of each other (e.g. after the GUI window is
+                    // inactive for an extended period). Using the full update interval could lead to a kind
+                    // of race condition and cause a regular subscription message to be missed.
+                    if self
+                        .fiat_prices
+                        .last_requests
+                        .get(&(price_setting.source, price_setting.currency))
+                        .as_ref()
+                        .filter(|req| req.timestamp + FIAT_PRICE_UPDATE_INTERVAL_SECS / 2 > now)
+                        .is_some()
+                    {
+                        // Cached request is still valid, no need to fetch a new one.
+                        tracing::info!(
+                            "Fiat price for {} from {} has been requested recently",
+                            price_setting.currency,
+                            price_setting.source,
+                        );
+                        return Task::none();
+                    }
+                    let new_request = cache::FiatPriceRequest {
+                        source: price_setting.source,
+                        currency: price_setting.currency,
+                        timestamp: now,
+                    };
+                    self.fiat_prices.last_requests.insert(
+                        (new_request.source, new_request.currency),
+                        new_request.clone(),
+                    );
+                    tracing::info!(
+                        "Getting fiat price in {} from {}",
+                        price_setting.currency,
+                        price_setting.source,
+                    );
+                    return Task::perform(
+                        async move { new_request.send_default().await },
+                        Message::GetFiatPriceResult,
+                    );
+                }
+                if let FiatMessage::ListCurrencies(source) = fiat_msg {
+                    println!("Tab requested currencies");
+                    match self.fiat_prices.currencies.get(&source) {
+                        Some((old, list))
+                            if now.saturating_sub(*old) <= CURRENCIES_LIST_TTL_SECS =>
+                        {
+                            return pane
+                                .update_tab_with_fiat(
+                                    tab_id,
+                                    FiatMessage::ListCurrenciesResult(
+                                        source,
+                                        *old,
+                                        Ok(ListCurrenciesResult {
+                                            currencies: list.clone(),
+                                        }),
+                                    ),
+                                    config,
+                                )
+                                .map(move |msg| Message::Pane(pane_id, msg));
+                        }
+                        _ => {
+                            // return the full message and handle below
+                            return Task::perform(
+                                async move {
+                                    let client = PriceClient::default_from_source(source);
+                                    (tab_id, source, now, client.list_currencies().await)
+                                },
+                                move |(tab_id, source, now, res)| {
+                                    Message::Pane(
+                                        pane_id,
+                                        pane::Message::Tab(
+                                            tab_id,
+                                            tab::Message::Run(Box::new(app::Message::Fiat(
+                                                FiatMessage::ListCurrenciesResult(source, now, res),
+                                            ))),
+                                        ),
+                                    )
+                                },
+                            );
+                        }
+                    }
+                }
+                if let FiatMessage::ListCurrenciesResult(source, requested_at, ref res) = fiat_msg {
+                    if let Ok(list) = &res {
+                        tracing::debug!(
+                            "Updating currencies list for source '{}' as requested at {}.",
+                            source,
+                            requested_at,
+                        );
+                        self.fiat_prices
+                            .currencies
+                            .insert(source, (requested_at, list.currencies.clone()));
+                    }
+                    // whatever the result, return it to the tab that requested it.
+                    return pane
+                        .update_tab_with_fiat(tab_id, fiat_msg, config)
+                        .map(move |msg| Message::Pane(pane_id, msg));
+
+                    //     return pane
+                    //         .update(msg, &self.config)
+                    //         .map(move |msg| Message::Pane(i, msg));
+                }
+            }
+        }
+        Task::none()
+    }
+}
+
 #[derive(Debug)]
 pub enum Key {
     Tab(bool),
@@ -355,7 +524,7 @@ impl GUI {
 
                 // First, collect all tabs that need updating
                 let mut tabs_to_update = Vec::new();
-                for (&j, pane) in self.panes.iter() {
+                for (&i, pane) in self.panes.iter() {
                     for tab in pane.tabs.iter() {
                         if tab
                             .wallet()
@@ -366,26 +535,22 @@ impl GUI {
                                     && sett.currency == new_price.currency()
                             })
                         {
-                            tabs_to_update.push((j, tab.id));
+                            tabs_to_update.push((i, tab.id));
                         }
                     }
                 }
 
                 // Then update each tab separately.
                 let mut tasks = Vec::new();
-                for (j, tab_id) in tabs_to_update {
-                    if let Some(pane) = self.panes.get_mut(j) {
+                for (i, tab_id) in tabs_to_update {
+                    if let Some(pane) = self.panes.get_mut(i) {
                         tasks.push(
-                            pane.update(
-                                pane::Message::Tab(
-                                    tab_id,
-                                    tab::Message::Run(Box::new(app::Message::Fiat(
-                                        FiatMessage::GetPriceResult(new_price.clone()),
-                                    ))),
-                                ),
+                            pane.update_tab_with_fiat(
+                                tab_id,
+                                FiatMessage::GetPriceResult(new_price.clone()),
                                 &self.config,
                             )
-                            .map(move |msg| Message::Pane(j, msg)),
+                            .map(move |msg| Message::Pane(i, msg)),
                         );
                     }
                 }
@@ -394,7 +559,7 @@ impl GUI {
             Message::Pane(i, msg) => {
                 if let Some(pane) = self.panes.get_mut(i) {
                     match msg {
-                        pane::Message::Tab(tab_id, tab::Message::Run(ref boxed))
+                        pane::Message::Tab(tab_id, tab::Message::Run(boxed))
                             if matches!(
                                 boxed.as_ref(),
                                 app::Message::Fiat(FiatMessage::GetPrice)
@@ -402,197 +567,196 @@ impl GUI {
                                     | app::Message::Fiat(FiatMessage::ListCurrenciesResult(..))
                             ) =>
                         {
-                            if let Some(tab) = pane.tabs.iter().find(|t| t.id == tab_id) {
-                                if let Some(price_setting) = tab.wallet().and_then(|w| {
-                                    w.fiat_price_setting.as_ref().filter(|sett| sett.is_enabled)
-                                }) {
-                                    let now = now().as_secs();
-                                    if let app::Message::Fiat(FiatMessage::GetPrice) =
-                                        boxed.as_ref()
-                                    {
-                                        println!("Tab id {} requested fiat price", tab_id);
-                                        println!("Tab fiat price enabled");
-
-                                        // If there's already a cached price no older than the update interval,
-                                        // return it to the specific tab that requested it.
-                                        if let Some(cached) = self
-                                            .global_cache
-                                            .fiat_prices
-                                            .prices
-                                            .get(&(price_setting.source, price_setting.currency))
-                                            .as_ref()
-                                            .filter(|req| {
-                                                req.requested_at() + FIAT_PRICE_UPDATE_INTERVAL_SECS
-                                                    > now
-                                            })
-                                        {
-                                            if tab
-                                                .cache()
-                                                .and_then(|c| c.fiat_price.as_ref())
-                                                .is_some_and(|p| {
-                                                    p.source() == cached.source()
-                                                        && p.currency() == cached.currency()
-                                                        && p.requested_at() == cached.requested_at()
-                                                })
-                                            {
-                                                tracing::info!(
-                                                    "Tab already has fiat price for {} from {}",
-                                                    cached.currency(),
-                                                    cached.source(),
-                                                );
-                                                return Task::none();
-                                            }
-                                            // Return cached price to the tab that requested it.
-                                            tracing::info!(
-                                                "Returning cached fiat price for {} from {} to tab",
-                                                cached.currency(),
-                                                cached.source(),
-                                            );
-                                            return pane
-                                                .update(
-                                                    pane::Message::Tab(
-                                                        tab_id,
-                                                        tab::Message::Run(Box::new(
-                                                            app::Message::Fiat(
-                                                                FiatMessage::GetPriceResult(
-                                                                    (*cached).clone(),
-                                                                ),
-                                                            ),
-                                                        )),
-                                                    ),
-                                                    &self.config,
-                                                )
-                                                .map(move |msg| Message::Pane(i, msg));
-                                        }
-                                        // Make sure there is not a pending request.
-                                        // Do nothing if the last request was recent and was for the same source & currency, where
-                                        // "recent" means within half the update interval.
-                                        // Using half the update interval is sufficient as we are mostly concerned with preventing
-                                        // multiple requests being sent within seconds of each other (e.g. after the GUI window is
-                                        // inactive for an extended period). Using the full update interval could lead to a kind
-                                        // of race condition and cause a regular subscription message to be missed.
-                                        if self
-                                            .global_cache
-                                            .fiat_prices
-                                            .last_requests
-                                            .get(&(price_setting.source, price_setting.currency))
-                                            .as_ref()
-                                            .filter(|req| {
-                                                req.timestamp + FIAT_PRICE_UPDATE_INTERVAL_SECS / 2
-                                                    > now
-                                            })
-                                            .is_some()
-                                        {
-                                            // Cached request is still valid, no need to fetch a new one.
-                                            tracing::info!(
-                                                "Fiat price for {} from {} has been requested recently",
-                                                price_setting.currency,
-                                                price_setting.source,
-                                            );
-                                            return Task::none();
-                                        }
-                                        let new_request = cache::FiatPriceRequest {
-                                            source: price_setting.source,
-                                            currency: price_setting.currency,
-                                            timestamp: now,
-                                        };
-                                        self.global_cache.fiat_prices.last_requests.insert(
-                                            (new_request.source, new_request.currency),
-                                            new_request.clone(),
-                                        );
-                                        tracing::info!(
-                                            "Getting fiat price in {} from {}",
-                                            price_setting.currency,
-                                            price_setting.source,
-                                        );
-                                        return Task::perform(
-                                            async move { new_request.send_default().await },
-                                            Message::GetFiatPriceResult,
-                                        );
-                                    }
-                                    if let app::Message::Fiat(FiatMessage::ListCurrencies(source)) =
-                                        **boxed
-                                    {
-                                        println!("Tab requested currencies");
-                                        match self.global_cache.fiat_prices.currencies.get(&source)
-                                        {
-                                            Some((old, list))
-                                                if now.saturating_sub(*old)
-                                                    <= CURRENCIES_LIST_TTL_SECS =>
-                                            {
-                                                // TODO: return this directly to tab using its update method
-                                                return pane
-                                                        .update(
-                                                            pane::Message::Tab(
-                                                                tab_id,
-                                                                tab::Message::Run(Box::new(
-                                                                    app::Message::Fiat(
-                                                                        FiatMessage::ListCurrenciesResult(
-                                                                            source, *old, Ok(ListCurrenciesResult { currencies: list.clone() })
-                                                                        ),
-                                                                    ),
-                                                                )),
-                                                            ),
-                                                            &self.config,
-                                                        )
-                                                        .map(move |msg| Message::Pane(i, msg));
-                                            }
-                                            _ => {
-                                                // return the full message and handle below
-                                                return Task::perform(
-                                                    async move {
-                                                        let client =
-                                                            PriceClient::default_from_source(
-                                                                source,
-                                                            );
-                                                        (
-                                                            tab_id,
-                                                            source,
-                                                            now,
-                                                            client.list_currencies().await,
-                                                        )
-                                                    },
-                                                    move |(tab_id, source, now, res)| {
-                                                        Message::Pane(i, pane::Message::Tab(
-                                                        tab_id,
-                                                        tab::Message::Run(Box::new(
-                                                            app::Message::Fiat(
-                                                                FiatMessage::ListCurrenciesResult(
-                                                                    source, now, res
-                                                                ),
-                                                            ),
-                                                        )),
-                                                    ),
-                                                )
-                                                    },
-                                                );
-                                            }
-                                        }
-                                    }
-                                    if let app::Message::Fiat(FiatMessage::ListCurrenciesResult(
-                                        source,
-                                        requested_at,
-                                        res,
-                                    )) = boxed.as_ref()
-                                    {
-                                        if let Ok(list) = &res {
-                                            tracing::debug!(
-                                                "Updating currencies list for source '{}' as requested at {}.",
-                                                source,
-                                                requested_at,
-                                            );
-                                            self.global_cache.fiat_prices.currencies.insert(
-                                                *source,
-                                                (*requested_at, list.currencies.clone()),
-                                            );
-                                        }
-                                        // whatever the result, return it to the tab that requested it.
-                                        return pane
-                                            .update(msg, &self.config)
-                                            .map(move |msg| Message::Pane(i, msg));
-                                    }
-                                }
+                            if let app::Message::Fiat(fiat_msg) = *boxed {
+                                return self.global_cache.handle_fiat_message(
+                                    i,
+                                    pane,
+                                    tab_id,
+                                    &self.config,
+                                    fiat_msg,
+                                );
                             }
+                            // if let Some(tab) = pane.tabs.iter().find(|t| t.id == tab_id) {
+                            //     if let Some(price_setting) = tab.wallet().and_then(|w| {
+                            //         w.fiat_price_setting.as_ref().filter(|sett| sett.is_enabled)
+                            //     }) {
+                            //         let now = now().as_secs();
+                            //         if let app::Message::Fiat(FiatMessage::GetPrice) =
+                            //             boxed.as_ref()
+                            //         {
+                            //             // return self.global_cache.handle_fiat_message(i, &pane, tab_id, fiat);
+                            //             println!("Tab id {} requested fiat price", tab_id);
+                            //             println!("Tab fiat price enabled");
+
+                            //             // If there's already a cached price no older than the update interval,
+                            //             // return it to the specific tab that requested it.
+                            //             if let Some(cached) = self
+                            //                 .global_cache
+                            //                 .fiat_prices
+                            //                 .prices
+                            //                 .get(&(price_setting.source, price_setting.currency))
+                            //                 .as_ref()
+                            //                 .filter(|req| {
+                            //                     req.requested_at() + FIAT_PRICE_UPDATE_INTERVAL_SECS
+                            //                         > now
+                            //                 })
+                            //             {
+                            //                 if tab
+                            //                     .cache()
+                            //                     .and_then(|c| c.fiat_price.as_ref())
+                            //                     .is_some_and(|p| {
+                            //                         p.source() == cached.source()
+                            //                             && p.currency() == cached.currency()
+                            //                             && p.requested_at() == cached.requested_at()
+                            //                     })
+                            //                 {
+                            //                     tracing::info!(
+                            //                         "Tab already has fiat price for {} from {}",
+                            //                         cached.currency(),
+                            //                         cached.source(),
+                            //                     );
+                            //                     return Task::none();
+                            //                 }
+                            //                 // Return cached price to the tab that requested it.
+                            //                 tracing::info!(
+                            //                     "Returning cached fiat price for {} from {} to tab",
+                            //                     cached.currency(),
+                            //                     cached.source(),
+                            //                 );
+                            //                 return pane
+                            //                     .update_tab_with_fiat(
+                            //                         tab_id,
+                            //                         FiatMessage::GetPriceResult((*cached).clone()),
+                            //                         &self.config,
+                            //                     )
+                            //                     .map(move |msg| Message::Pane(i, msg));
+                            //             }
+                            //             // Make sure there is not a pending request.
+                            //             // Do nothing if the last request was recent and was for the same source & currency, where
+                            //             // "recent" means within half the update interval.
+                            //             // Using half the update interval is sufficient as we are mostly concerned with preventing
+                            //             // multiple requests being sent within seconds of each other (e.g. after the GUI window is
+                            //             // inactive for an extended period). Using the full update interval could lead to a kind
+                            //             // of race condition and cause a regular subscription message to be missed.
+                            //             if self
+                            //                 .global_cache
+                            //                 .fiat_prices
+                            //                 .last_requests
+                            //                 .get(&(price_setting.source, price_setting.currency))
+                            //                 .as_ref()
+                            //                 .filter(|req| {
+                            //                     req.timestamp + FIAT_PRICE_UPDATE_INTERVAL_SECS / 2
+                            //                         > now
+                            //                 })
+                            //                 .is_some()
+                            //             {
+                            //                 // Cached request is still valid, no need to fetch a new one.
+                            //                 tracing::info!(
+                            //                     "Fiat price for {} from {} has been requested recently",
+                            //                     price_setting.currency,
+                            //                     price_setting.source,
+                            //                 );
+                            //                 return Task::none();
+                            //             }
+                            //             let new_request = cache::FiatPriceRequest {
+                            //                 source: price_setting.source,
+                            //                 currency: price_setting.currency,
+                            //                 timestamp: now,
+                            //             };
+                            //             self.global_cache.fiat_prices.last_requests.insert(
+                            //                 (new_request.source, new_request.currency),
+                            //                 new_request.clone(),
+                            //             );
+                            //             tracing::info!(
+                            //                 "Getting fiat price in {} from {}",
+                            //                 price_setting.currency,
+                            //                 price_setting.source,
+                            //             );
+                            //             return Task::perform(
+                            //                 async move { new_request.send_default().await },
+                            //                 Message::GetFiatPriceResult,
+                            //             );
+                            //         }
+                            //         if let app::Message::Fiat(FiatMessage::ListCurrencies(source)) =
+                            //             **boxed
+                            //         {
+                            //             println!("Tab requested currencies");
+                            //             match self.global_cache.fiat_prices.currencies.get(&source)
+                            //             {
+                            //                 Some((old, list))
+                            //                     if now.saturating_sub(*old)
+                            //                         <= CURRENCIES_LIST_TTL_SECS =>
+                            //                 {
+                            //                     return pane
+                            //                         .update_tab_with_fiat(
+                            //                             tab_id,
+                            //                             FiatMessage::ListCurrenciesResult(
+                            //                                 source,
+                            //                                 *old,
+                            //                                 Ok(ListCurrenciesResult {
+                            //                                     currencies: list.clone(),
+                            //                                 }),
+                            //                             ),
+                            //                             &self.config,
+                            //                         )
+                            //                         .map(move |msg| Message::Pane(i, msg));
+                            //                 }
+                            //                 _ => {
+                            //                     // return the full message and handle below
+                            //                     return Task::perform(
+                            //                         async move {
+                            //                             let client =
+                            //                                 PriceClient::default_from_source(
+                            //                                     source,
+                            //                                 );
+                            //                             (
+                            //                                 tab_id,
+                            //                                 source,
+                            //                                 now,
+                            //                                 client.list_currencies().await,
+                            //                             )
+                            //                         },
+                            //                         move |(tab_id, source, now, res)| {
+                            //                             Message::Pane(i, pane::Message::Tab(
+                            //                             tab_id,
+                            //                             tab::Message::Run(Box::new(
+                            //                                 app::Message::Fiat(
+                            //                                     FiatMessage::ListCurrenciesResult(
+                            //                                         source, now, res
+                            //                                     ),
+                            //                                 ),
+                            //                             )),
+                            //                         ),
+                            //                     )
+                            //                         },
+                            //                     );
+                            //                 }
+                            //             }
+                            //         }
+                            //         if let app::Message::Fiat(FiatMessage::ListCurrenciesResult(
+                            //             source,
+                            //             requested_at,
+                            //             res,
+                            //         )) = boxed.as_ref()
+                            //         {
+                            //             if let Ok(list) = &res {
+                            //                 tracing::debug!(
+                            //                     "Updating currencies list for source '{}' as requested at {}.",
+                            //                     source,
+                            //                     requested_at,
+                            //                 );
+                            //                 self.global_cache.fiat_prices.currencies.insert(
+                            //                     *source,
+                            //                     (*requested_at, list.currencies.clone()),
+                            //                 );
+                            //             }
+                            //             // whatever the result, return it to the tab that requested it.
+                            //             return pane
+                            //                 .update(msg, &self.config)
+                            //                 .map(move |msg| Message::Pane(i, msg));
+                            //         }
+                            //     }
+                            // }
                         }
                         _ => {
                             return pane
@@ -703,6 +867,21 @@ impl GUI {
     pub fn scale_factor(&self) -> f64 {
         1.0
     }
+
+    // /// Helper to update a specific pane's tab with a fiat message
+    // fn update_pane_tab_with_fiat(
+    //     &mut self,
+    //     pane_id: pane_grid::Pane,
+    //     tab_id: usize,
+    //     fiat_msg: FiatMessage,
+    // ) -> Task<Message> {
+    //     if let Some(pane) = self.panes.get_mut(pane_id) {
+    //         pane.update_tab_with_fiat(tab_id, fiat_msg, &self.config)
+    //             .map(move |msg| Message::Pane(pane_id, msg))
+    //     } else {
+    //         Task::none()
+    //     }
+    // }
 }
 
 pub struct Config {

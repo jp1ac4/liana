@@ -2,7 +2,10 @@ use iced::{Length, Subscription, Task};
 use iced_aw::ContextMenu;
 use liana_ui::{component::text::*, icon::plus_icon, theme, widget::*};
 
-use crate::gui::Config;
+use crate::{
+    app::{self, message::FiatMessage},
+    gui::Config,
+};
 
 use super::tab;
 
@@ -88,6 +91,22 @@ impl Pane {
         if self.focused_tab + focused_tab + 1 < self.tabs.len() {
             self.focused_tab += focused_tab + 1;
         }
+    }
+
+    /// Helper to update a tab with a fiat message
+    pub fn update_tab_with_fiat(
+        &mut self,
+        tab_id: usize,
+        fiat_msg: FiatMessage,
+        config: &Config,
+    ) -> Task<Message> {
+        self.update(
+            Message::Tab(
+                tab_id,
+                tab::Message::Run(Box::new(app::Message::Fiat(fiat_msg))),
+            ),
+            config,
+        )
     }
 
     pub fn update(&mut self, message: Message, cfg: &Config) -> Task<Message> {
