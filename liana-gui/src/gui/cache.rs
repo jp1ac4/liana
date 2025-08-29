@@ -32,6 +32,22 @@ pub struct GlobalCache {
 }
 
 impl GlobalCache {
+    fn fiat_price(
+        &self,
+        source: PriceSource,
+        currency: Currency,
+    ) -> Option<&app::cache::FiatPrice> {
+        self.fiat_prices.prices.get(&(source, currency))
+    }
+
+    fn last_fiat_price_request(
+        &self,
+        source: PriceSource,
+        currency: Currency,
+    ) -> Option<&app::cache::FiatPriceRequest> {
+        self.fiat_prices.last_requests.get(&(source, currency))
+    }
+
     pub fn handle_fiat_message(
         &mut self,
         pane_id: pane_grid::Pane,
@@ -54,10 +70,7 @@ impl GlobalCache {
                     // If there's already a cached price no older than the update interval,
                     // return it to the specific tab that requested it.
                     if let Some(cached) = self
-                        .fiat_prices
-                        .prices
-                        .get(&(price_setting.source, price_setting.currency))
-                        .as_ref()
+                        .fiat_price(price_setting.source, price_setting.currency)
                         .filter(|req| req.requested_at() + FIAT_PRICE_UPDATE_INTERVAL_SECS > now)
                     {
                         if tab
@@ -98,10 +111,7 @@ impl GlobalCache {
                     // inactive for an extended period). Using the full update interval could lead to a kind
                     // of race condition and cause a regular subscription message to be missed.
                     if self
-                        .fiat_prices
-                        .last_requests
-                        .get(&(price_setting.source, price_setting.currency))
-                        .as_ref()
+                        .last_fiat_price_request(price_setting.source, price_setting.currency)
                         .filter(|req| req.timestamp + FIAT_PRICE_UPDATE_INTERVAL_SECS / 2 > now)
                         .is_some()
                     {
