@@ -99,10 +99,10 @@ pub async fn coins_to_cache(
 pub struct FiatPriceCache {
     /// The last fetched fiat price, if any.
     pub fiat_price: Option<FiatPrice>,
-    /// A pending request, if any.
-    ///
-    /// This is the last request that may or may not yet have been completed.
-    pub last_request: Option<FiatPriceRequest>,
+    // /// A pending request, if any.
+    // ///
+    // /// This is the last request that may or may not yet have been completed.
+    // pub last_request: Option<FiatPriceRequest>,
 }
 
 /// Represents a fiat price fetched from the API together with the request that was used to fetch it.
