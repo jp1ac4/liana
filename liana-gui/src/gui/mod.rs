@@ -349,7 +349,7 @@ impl GUI {
                 // First, collect all tabs that need updating
                 let mut tabs_to_update = Vec::new();
                 for (&j, pane) in self.panes.iter() {
-                    for (tab_idx, tab) in pane.tabs.iter().enumerate() {
+                    for tab in pane.tabs.iter() {
                         if tab
                             .wallet()
                             .and_then(|w| w.fiat_price_setting.as_ref())
@@ -359,19 +359,19 @@ impl GUI {
                                     && sett.currency == new_price.currency()
                             })
                         {
-                            tabs_to_update.push((j, tab_idx));
+                            tabs_to_update.push((j, tab.id));
                         }
                     }
                 }
 
                 // Then update each tab separately.
                 let mut tasks = Vec::new();
-                for (j, tab_idx) in tabs_to_update {
+                for (j, tab_id) in tabs_to_update {
                     if let Some(pane) = self.panes.get_mut(j) {
                         tasks.push(
                             pane.update(
                                 pane::Message::Tab(
-                                    tab_idx,
+                                    tab_id,
                                     tab::Message::Run(Box::new(app::Message::Fiat(
                                         FiatMessage::GetPriceResult(new_price.clone()),
                                     ))),
@@ -387,13 +387,16 @@ impl GUI {
             Message::Pane(i, msg) => {
                 if let Some(pane) = self.panes.get_mut(i) {
                     match msg {
-                        pane::Message::Tab(tab_idx, tab::Message::Run(m))
+                        pane::Message::Tab(tab_id, tab::Message::Run(m))
                             if matches!(m.as_ref(), app::Message::Fiat(FiatMessage::GetPrice)) =>
                         {
-                            if let Some(tab) = pane.tabs.get(tab_idx) {
+                            println!("Tab idx {} requested fiat price", tab_id);
+                            if let Some(tab) = pane.tabs.iter().find(|t| t.id == tab_id) {
+                                println!("Tab requested fiat price");
                                 if let Some(price_setting) = tab.wallet().and_then(|w| {
                                     w.fiat_price_setting.as_ref().filter(|sett| sett.is_enabled)
                                 }) {
+                                    println!("Tab fiat price enabled");
                                     let now = now().as_secs();
                                     // If there's already a cached price no older than the update interval,
                                     // return it to the specific tab that requested it.
@@ -408,6 +411,22 @@ impl GUI {
                                                 > now
                                         })
                                     {
+                                        if tab
+                                            .cache()
+                                            .and_then(|c| c.fiat_price_cache.fiat_price.as_ref())
+                                            .is_some_and(|p| {
+                                                p.source() == cached.source()
+                                                    && p.currency() == cached.currency()
+                                                    && p.requested_at() == cached.requested_at()
+                                            })
+                                        {
+                                            tracing::info!(
+                                                "Tab already has fiat price for {} from {}",
+                                                cached.currency(),
+                                                cached.source(),
+                                            );
+                                            return Task::none();
+                                        }
                                         // Return cached price to the tab that requested it.
                                         tracing::info!(
                                             "Returning cached fiat price for {} from {} to tab",
@@ -417,7 +436,7 @@ impl GUI {
                                         return pane
                                             .update(
                                                 pane::Message::Tab(
-                                                    tab_idx,
+                                                    tab_id,
                                                     tab::Message::Run(Box::new(
                                                         app::Message::Fiat(
                                                             FiatMessage::GetPriceResult(
@@ -450,7 +469,7 @@ impl GUI {
                                         .is_some()
                                     {
                                         // Cached request is still valid, no need to fetch a new one.
-                                        tracing::debug!(
+                                        tracing::info!(
                                             "Fiat price for {} from {} has been requested recently",
                                             price_setting.currency,
                                             price_setting.source,
@@ -466,7 +485,7 @@ impl GUI {
                                         (new_request.source, new_request.currency),
                                         new_request.clone(),
                                     );
-                                    tracing::debug!(
+                                    tracing::info!(
                                         "Getting fiat price in {} from {}",
                                         price_setting.currency,
                                         price_setting.source,
