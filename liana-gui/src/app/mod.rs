@@ -339,15 +339,9 @@ impl App {
         {
             // Force a new subscription to be created if the source or currency changes. This way, the first tick
             // will occur `FIAT_PRICE_UPDATE_INTERVAL_SECS` seconds after the initial cache entry for this pair.
-            if self
-                .cache
-                .fiat_price_cache
-                .fiat_price
-                .as_ref()
-                .is_some_and(|price| {
-                    price.source() == sett.source && price.currency() == sett.currency
-                })
-            {
+            if self.cache.fiat_price.as_ref().is_some_and(|price| {
+                price.source() == sett.source && price.currency() == sett.currency
+            }) {
                 subs.push(
                     time::every(Duration::from_secs(FIAT_PRICE_UPDATE_INTERVAL_SECS))
                         .map(|_| Message::Fiat(FiatMessage::GetPrice)),
@@ -467,7 +461,7 @@ impl App {
                 // Update the cache with the result even if there was an error.
 
                 // TODO: check this is the configured source & currency?
-                self.cache.fiat_price_cache.fiat_price = Some(fiat_price);
+                self.cache.fiat_price = Some(fiat_price);
                 Task::perform(async {}, |_| Message::CacheUpdated)
             }
             Message::UpdateDaemonCache(res) => {

@@ -8,6 +8,7 @@ use liana::miniscript::bitcoin::{
 };
 use lianad::config::Config as DaemonConfig;
 
+use crate::services::fiat::api::PriceApiError;
 use crate::{
     app::{
         cache::{DaemonCache, FiatPrice},
@@ -79,7 +80,7 @@ pub enum FiatMessage {
     ListCurrenciesResult(
         PriceSource,
         /* timestamp */ u64,
-        Result<ListCurrenciesResult, Error>,
+        Result<ListCurrenciesResult, PriceApiError>,
     ),
     SaveChanges,
     ValidateCurrencySetting,

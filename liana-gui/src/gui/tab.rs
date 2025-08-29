@@ -12,7 +12,7 @@ use lianad::commands::ListCoinsResult;
 use crate::{
     app::{
         self,
-        cache::{Cache, DaemonCache, FiatPriceCache},
+        cache::{Cache, DaemonCache},
         settings::{update_settings_file, WalletSettings},
         wallet::Wallet,
         App,
@@ -378,7 +378,7 @@ pub fn create_app_with_remote_backend(
                 // We ignore last poll fields for remote backend.
                 last_poll_timestamp: None,
             },
-            fiat_price_cache: FiatPriceCache::default(),
+            fiat_price: None,
         },
         Arc::new(
             Wallet::new(wallet.descriptor)
