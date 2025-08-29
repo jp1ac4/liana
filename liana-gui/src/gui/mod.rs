@@ -373,7 +373,8 @@ impl GUI {
                         pane::Message::Tab(tab_id, tab::Message::Run(inner))
                             if matches!(inner.as_ref(), app::Message::Fiat(_)) =>
                         {
-                            // Use another if let to unbox the inner message.
+                            // We use another `if let` here in order to unbox the inner message and
+                            // assign it to the `fiat_msg` variable.
                             if let app::Message::Fiat(fiat_msg) = *inner {
                                 return self.global_cache.handle_fiat_message(
                                     i,
@@ -382,8 +383,6 @@ impl GUI {
                                     &self.config,
                                     fiat_msg,
                                 );
-                            } else {
-                                unreachable!("inner message matches fiat")
                             }
                         }
                         _ => {
@@ -495,21 +494,6 @@ impl GUI {
     pub fn scale_factor(&self) -> f64 {
         1.0
     }
-
-    // /// Helper to update a specific pane's tab with a fiat message
-    // fn update_pane_tab_with_fiat(
-    //     &mut self,
-    //     pane_id: pane_grid::Pane,
-    //     tab_id: usize,
-    //     fiat_msg: FiatMessage,
-    // ) -> Task<Message> {
-    //     if let Some(pane) = self.panes.get_mut(pane_id) {
-    //         pane.update_tab_with_fiat(tab_id, fiat_msg, &self.config)
-    //             .map(move |msg| Message::Pane(pane_id, msg))
-    //     } else {
-    //         Task::none()
-    //     }
-    // }
 }
 
 pub struct Config {

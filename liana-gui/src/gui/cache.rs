@@ -48,6 +48,12 @@ impl GlobalCache {
         self.fiat_prices.last_requests.get(&(source, currency))
     }
 
+    fn add_fiat_price_request(&mut self, request: app::cache::FiatPriceRequest) {
+        self.fiat_prices
+            .last_requests
+            .insert((request.source, request.currency), request);
+    }
+
     pub fn handle_fiat_message(
         &mut self,
         pane_id: pane_grid::Pane,
@@ -76,11 +82,7 @@ impl GlobalCache {
                         if tab
                             .cache()
                             .and_then(|c| c.fiat_price.as_ref())
-                            .is_some_and(|p| {
-                                p.source() == cached.source()
-                                    && p.currency() == cached.currency()
-                                    && p.requested_at() == cached.requested_at()
-                            })
+                            .is_some_and(|tab_price| tab_price.request == cached.request)
                         {
                             tracing::info!(
                                 "Tab already has fiat price for {} from {}",
@@ -128,10 +130,7 @@ impl GlobalCache {
                         currency: price_setting.currency,
                         timestamp: now,
                     };
-                    self.fiat_prices.last_requests.insert(
-                        (new_request.source, new_request.currency),
-                        new_request.clone(),
-                    );
+                    self.add_fiat_price_request(new_request.clone());
                     tracing::info!(
                         "Getting fiat price in {} from {}",
                         price_setting.currency,
