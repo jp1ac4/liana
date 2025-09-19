@@ -6,7 +6,7 @@ use crate::{
 use std::{collections::HashSet, convert::TryInto, sync, thread, time};
 
 use liana::descriptors;
-use miniscript::bitcoin::{self, secp256k1};
+use miniscript::bitcoin::{self, bip32::ChildNumber, secp256k1};
 
 #[derive(Debug, Clone)]
 struct UpdatedCoins {
@@ -16,6 +16,22 @@ struct UpdatedCoins {
     pub spending: Vec<(bitcoin::OutPoint, bitcoin::Txid)>,
     pub expired_spending: Vec<bitcoin::OutPoint>,
     pub spent: Vec<(bitcoin::OutPoint, bitcoin::Txid, i32, u32)>,
+}
+
+// Helper function for creating a received `Coin` from a `UTxO`. A received coin's `block_info` is left
+// as `None` initially and updated later in the poller.
+fn received_coin_from_utxo(utxo: UTxO, derivation_index: ChildNumber, is_change: bool) -> Coin {
+    Coin {
+        outpoint: utxo.outpoint,
+        is_immature: utxo.is_immature,
+        amount: utxo.amount,
+        derivation_index,
+        is_change,
+        block_info: None,
+        spend_txid: None,
+        spend_block: None,
+        is_from_self: false,
+    }
 }
 
 // Update the state of our coins. There may be new unspent, and existing ones may become confirmed
@@ -41,12 +57,6 @@ fn update_coins(
         if curr_coins.contains_key(&utxo.outpoint) {
             continue;
         }
-        let UTxO {
-            outpoint,
-            amount,
-            is_immature,
-            ..
-        } = utxo;
         // We can only really treat them if we know the derivation index that was used.
         let (derivation_index, is_change) = match address {
             UTxOAddress::Address(address) => {
@@ -82,18 +92,7 @@ fn update_coins(
         }
 
         // Now record this coin as a newly received one.
-        let coin = Coin {
-            outpoint,
-            is_immature,
-            amount,
-            derivation_index,
-            is_change,
-            block_info: None,
-            spend_txid: None,
-            spend_block: None,
-            is_from_self: false,
-        };
-        received.push(coin);
+        received.push(received_coin_from_utxo(utxo, derivation_index, is_change));
     }
     log::debug!("Newly received coins: {:?}", received);
 
