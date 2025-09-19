@@ -99,6 +99,10 @@ fn update_coins(
     }
 
     // Now process the UTXOs that need an address lookup.
+    // To increase the chance of the lookup finding a match, the coins are sorted in order of increasing
+    // confirmation block height followed by unconfirmed coins. We expect the block height to be correlated to
+    // derivation index and we want to start with lower derivation indices and derive more DB addresses as we progress.
+    address_lookup_queue.sort_by_key(|(utxo, _)| utxo.block_height.unwrap_or(i32::MAX));
     let mut db_last_used_indices = HashMap::</* is_change */ bool, ChildNumber>::new();
     for (utxo, address) in address_lookup_queue {
         // We can only really treat them if we know the derivation index that was used.
