@@ -59,3 +59,11 @@ jsonrpc = { version = "0.17", features = ["minreq_http"], default-features = fal
 
 # import/export labels
 bip329 = { version = "0.3.0", default-features = false }
+
+[dev-dependencies]
+# Spawn an Electrum server wired to bitcoind for integration tests, and download tested binaries.
+# Use electrsd with electrs v0.10.6.
+electrsd = { version = "0.35", default-features = false, features = ["download", "electrs_0_10_6", "corepc-node_24_2", "corepc-node_29_0"] }
+tempfile = "3"
+serial_test = "3"
+anyhow = "1"
