@@ -1209,7 +1209,7 @@ impl SelectKeySource {
         collapsible_input_button(
             self.focus == Focus::EnterSafetyNetToken,
             Some(icon::enter_box_icon()),
-            "Enter a Safety Net token".to_string(),
+            "Enter a Rescue token".to_string(),
             "aaaa-bbbb-cccc".to_string(),
             &self.form_safety_net_token,
             Some(|token| Self::route(SelectKeySourceMessage::Token(token))),
