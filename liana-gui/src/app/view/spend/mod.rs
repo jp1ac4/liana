@@ -9,10 +9,16 @@ use iced::{
 use liana::{
     descriptors::LianaPolicy,
     miniscript::bitcoin::{bip32::Fingerprint, Amount, Denomination, Network},
+    spend::DUST_OUTPUT_SATS,
 };
 
 use liana_ui::{
-    component::{amount::*, badge, button, form, text::*},
+    color,
+    component::{
+        amount::*,
+        badge, button, form,
+        text::{self, *},
+    },
     icon, theme,
     widget::*,
 };
@@ -247,9 +253,8 @@ pub fn create_spend_tx<'a>(
                     // and it has the max selected.
                     Row::new().push(text("Select at least one coin.").style(theme::text::secondary))
                 } else {
-                    // There must be a recipient with max selected and value 0.
-                    Row::new()
-                        .push(text("Check max amount for recipient.").style(theme::text::secondary))
+                    // There must be a recipient with max selected and value below dust.
+                    Row::new().push(text("Select or add more funds.").style(theme::text::secondary))
                 }
             } else {
                 Row::new()
@@ -360,6 +365,8 @@ pub fn recipient_view<'a>(
     is_recovery: bool,
 ) -> Element<'a, CreateSpendMessage> {
     let btc_amt = Amount::from_str_in(&amount.value, Denomination::Bitcoin).ok();
+    const AMT_WARNING_TXT: &str =
+        "Invalid amount. (Note amounts lower than 0.000005 BTC are invalid.)";
 
     // Recipient for recovery cannot be deleted.
     let header = (!is_recovery).then_some(
@@ -416,13 +423,20 @@ pub fn recipient_view<'a>(
         let amount_txt = btc_amt
             .map(|a| a.to_formatted_string())
             .unwrap_or(amount.value.clone());
-        Container::new(text(amount_txt).size(P1_SIZE).style(theme::text::secondary))
-            .width(Length::Fill)
+        let warning = btc_amt
+            .filter(|a| a.to_sat() < DUST_OUTPUT_SATS)
+            .map(|_| text::caption(AMT_WARNING_TXT).color(color::RED));
+        Container::new(
+            Column::new()
+                .push(text(amount_txt).size(P1_SIZE).style(theme::text::secondary))
+                .push_maybe(warning),
+        )
+        .width(Length::Fill)
     } else {
         form::Form::new_amount_btc("0.001 (in BTC)", amount, move |msg| {
             CreateSpendMessage::RecipientEdited(index, "amount", msg)
         })
-        .warning("Invalid amount. (Note amounts lower than 0.000005 BTC are invalid.)")
+        .warning(AMT_WARNING_TXT)
         .size(P1_SIZE)
         .padding(10)
         .into_container()

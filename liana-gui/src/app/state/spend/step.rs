@@ -480,14 +480,17 @@ impl DefineSpend {
                     }
                 }
                 if let Some((i, recipient)) = recipient_with_max {
+                    // Set the amount left to select to 0 since we are setting here the recipient
+                    // value to match the currently selected coins.
+                    self.amount_left_to_select = Some(Amount::from_sat(0));
                     let amount = Amount::from_sat(if destinations.is_empty() {
                         // If there are no other recipients, then the missing value will
                         // be the amount left to select in order to create an output at the dust
-                        // threshold. Therefore, set this recipient's amount to this value so
-                        // that the information shown is consistent.
+                        // threshold. Therefore, set this recipient's amount to the amount it would
+                        // get if there weren't any restrictions on output amount.
                         // Otherwise, there are already insufficient funds for the other
                         // recipients and so the max available for this recipient is 0.
-                        DUST_OUTPUT_SATS
+                        DUST_OUTPUT_SATS.saturating_sub(missing)
                     } else {
                         0
                     })
