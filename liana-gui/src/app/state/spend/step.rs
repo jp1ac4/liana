@@ -237,6 +237,7 @@ impl DefineSpend {
 
     pub fn self_send(mut self) -> Self {
         self.recipients = Vec::new();
+        self.is_user_coin_selection = true;
         self
     }
 
