@@ -24,6 +24,15 @@ impl Params {
             Params::Map(map) => map.get(name),
         }
     }
+
+    /// Get the parameter, treating null as None.
+    pub fn get_nullable<Q>(&self, index: usize, name: &Q) -> Option<&serde_json::Value>
+    where
+        String: std::borrow::Borrow<Q>,
+        Q: ?Sized + Ord + Eq + std::hash::Hash,
+    {
+        self.get(index, name).filter(|v| !v.is_null())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

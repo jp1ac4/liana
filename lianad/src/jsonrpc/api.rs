@@ -220,19 +220,14 @@ fn list_revealed_addresses(
         .and_then(|l| l.try_into().ok())
         .ok_or_else(|| Error::invalid_params("Invalid 'limit' parameter."))?;
     // A missing value and `null` are both mapped to `None`.
-    let start_index = if let Some(ind) = params.get(3, "start_index") {
-        if ind.as_null().is_some() {
-            None
-        } else {
-            let ind_u32: u32 = ind
-                .as_u64()
+    let start_index: Option<u32> = params
+        .get_nullable(3, "start_index")
+        .map(|ind| {
+            ind.as_u64()
                 .and_then(|ind_u64| ind_u64.try_into().ok())
-                .ok_or_else(|| Error::invalid_params("Invalid 'start_index' parameter."))?;
-            Some(ind_u32)
-        }
-    } else {
-        None
-    };
+                .ok_or_else(|| Error::invalid_params("Invalid 'start_index' parameter."))
+        })
+        .transpose()?;
 
     let res = &control.list_revealed_addresses(
         is_change,
