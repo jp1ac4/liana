@@ -242,8 +242,8 @@ fn update_deriv_indexes(
     control: &DaemonControl,
     params: Params,
 ) -> Result<serde_json::Value, Error> {
-    let receive = params.get(0, "receive");
-    let change = params.get(1, "change");
+    let receive = params.get_nullable(0, "receive");
+    let change = params.get_nullable(1, "change");
 
     if receive.is_none() && change.is_none() {
         return Err(Error::invalid_params(
